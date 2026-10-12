@@ -104,7 +104,7 @@ open?” → clear the Android “Open by default” preferences for the wallet)
 ### Version badge
 
 The **About** line displays the version, read from `app.json` (never
-hard-coded). Current version: **0.4.31**.
+hard-coded). Current version: **0.4.33**.
 
 ### Controlled devnet fixture
 
@@ -214,14 +214,15 @@ Scripts: `npm run typecheck`, `npm run doctor`, `npm test`, `npm run android`.
 
 ### Download / Install
 
-No APK release is published yet. A **signed arm64 APK** will be attached to a
-future release (`v0.4.31`) on the repository's Releases page:
+A **signed arm64 APK** is published on the repository's Releases page:
 
-- Releases: <https://github.com/corentinladaique/pocket-multisig/releases>
+- **Latest (v0.4.33)**: <https://github.com/corentinladaique/multisig/releases/download/v0.4.33/pocket-multisig-0.4.33-seeker-arm64.apk>
+- All releases: <https://github.com/corentinladaique/multisig/releases>
 
-Until then, build and install the app locally (see *Installation* above).
-Install the APK on a **Seeker (Android, arm64)**, either with
-`adb install -r <file>.apk` or by opening the file on the phone.
+Install it on a **Seeker (Android, arm64)** by opening the file on the phone
+(allow installing from this source), or with `adb install -r <file>.apk`. It
+runs on **devnet** — no real funds at stake. You can also build and install the
+app locally (see *Installation* above).
 
 ### Usage
 
@@ -392,7 +393,7 @@ du wallet).
 ### Badge de version
 
 La ligne **About** affiche la version, lue depuis `app.json` (jamais codée en
-dur). Version courante : **0.4.31**.
+dur). Version courante : **0.4.33**.
 
 ### Fixture devnet contrôlée
 
@@ -503,15 +504,16 @@ Scripts : `npm run typecheck`, `npm run doctor`, `npm test`, `npm run android`.
 
 ### Téléchargement / Installation
 
-Aucune release APK n'est encore publiée. Un **APK signé arm64** sera joint à une
-future release (`v0.4.31`) sur la page Releases du dépôt :
+Un **APK signé arm64** est publié sur la page Releases du dépôt :
 
-- Releases : <https://github.com/corentinladaique/pocket-multisig/releases>
+- **Dernière version (v0.4.33)** : <https://github.com/corentinladaique/multisig/releases/download/v0.4.33/pocket-multisig-0.4.33-seeker-arm64.apk>
+- Toutes les releases : <https://github.com/corentinladaique/multisig/releases>
 
-En attendant, construisez et installez l'application localement (voir
-*Installation* ci-dessus). Installez l'APK sur un **Seeker (Android, arm64)**,
-soit via `adb install -r <fichier>.apk`, soit en ouvrant le fichier sur le
-téléphone.
+Installez-le sur un **Seeker (Android, arm64)** en ouvrant le fichier sur le
+téléphone (autoriser l'installation depuis cette source), ou via
+`adb install -r <fichier>.apk`. L'application tourne sur **devnet** — aucun
+fonds réel en jeu. Vous pouvez aussi construire et installer l'application
+localement (voir *Installation* ci-dessus).
 
 ### Utilisation
 
