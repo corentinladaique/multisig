@@ -186,6 +186,17 @@ check('12. destination invalide : message utilisateur simple, CTA toujours prote
   assert.ok(PROPOSAL.includes('build.errors.length === 0 && pipeline.status !=='));
 });
 
+check('13. carte « sent / pending » : repli fermé par défaut (titre autoportant)', () => {
+  // Le corps de la carte est un repli FERMÉ par défaut : replié, le titre dit
+  // déjà tout l'essentiel (« envoyé / non vérifié »).
+  assert.ok(
+    PROPOSAL.includes('const [pendingVerificationOpen, setPendingVerificationOpen] = useState(false);'),
+    'repli ferme par defaut',
+  );
+  assert.ok(PROPOSAL.includes('>Proposal sent — verification pending<'), 'titre « envoyé / non vérifié »');
+  assert.ok(!/Proposal failed/i.test(PROPOSAL), 'jamais « failed » (registre honnête)');
+});
+
 setTimeout(() => {
   console.log(`\n${passed} test(s) OK`);
   if (process.exitCode === 1) process.exit(1);

@@ -886,6 +886,24 @@ check('65. signature presente + relecture indisponible : UN seul etat, jamais ro
   assert.ok(card.includes('label="Troubleshooting details"'), 'divulgation de depannage');
   assert.ok(card.includes('{pendingVerificationRaw}'), 'brut rendu seulement replie');
   assert.ok(NEW.includes('const pendingVerificationRaw ='), 'brut compose a part');
+  // 6 : la carte est un REPLI, FERMÉ par défaut (en-tête compact + chevron).
+  assert.ok(
+    NEW.includes('const [pendingVerificationOpen, setPendingVerificationOpen] = useState(false);'),
+    'repli ferme par defaut',
+  );
+  assert.ok(
+    card.includes('accessibilityState={{ expanded: pendingVerificationOpen }}'),
+    'semantique de repli',
+  );
+  const expandedOnly = card.slice(card.indexOf('{pendingVerificationOpen ? ('));
+  const headerOnly = card.slice(0, card.indexOf('{pendingVerificationOpen ? ('));
+  assert.ok(expandedOnly.includes('accessibilityLabel="Check again"'), 'Check again dans la partie depliee');
+  assert.ok(
+    expandedOnly.includes('accessibilityLabel="Back to proposals"'),
+    'Back to proposals dans la partie depliee',
+  );
+  assert.ok(!headerOnly.includes('accessibilityLabel="Check again"'), 'aucune action quand replie');
+  assert.ok(!headerOnly.includes('accessibilityLabel="Back to proposals"'), 'aucune action quand replie');
   // 14 : aucune note d implementation dans cette branche.
   for (const note of [
     'Only the creator signs',
