@@ -39,7 +39,10 @@ check('1. les deux ecrans Preview ont ete supprimes du disque', () => {
 
 check('2. Step 5 rend les quatre familles d etats', () => {
   assert.ok(step5.includes('Review and create'), 'etat ready : CTA principal');
-  assert.ok(step5.includes('Nothing was sent.'), 'etat echec avant signature');
+  assert.ok(
+    step5.includes('{CREATION_CANCELLED_TITLE}') && step5.includes('{CREATION_CANCELLED_BODY}'),
+    'etat echec avant signature (copie humaine)',
+  );
   assert.ok(
     step5.includes("VAULT_VISIBLE_LABELS['signed-pending-confirmation']"),
     'etat signature en attente (libelle partage)',
@@ -105,8 +108,8 @@ check('8. aucun useEffect ne declenche la creation', () => {
   }
 });
 
-check('9. sans signature : Nothing was sent. et Prepare again correctement conditionne', () => {
-  assert.ok(step5.includes('Nothing was sent.'));
+check('9. sans signature : copie humaine d annulation et Prepare again correctement conditionne', () => {
+  assert.ok(step5.includes('{CREATION_CANCELLED_BODY}'));
   assert.ok(
     CREATE.includes('const needsPrepareAgain = hasCreateResult && attemptOutcome?.allowNewAttempt === true;'),
     'Prepare again depend de allowNewAttempt',
@@ -135,7 +138,7 @@ check('12/13. relecture en lecture seule, section repliable conditionnee', () =>
 check('14. succes : Open vault et View proposals disponibles', () => {
   assert.ok(step5.includes('Open vault'));
   assert.ok(step5.includes('View proposals'));
-  assert.ok(step5.includes('onGoToInbox'));
+  assert.ok(step5.includes('onViewProposals'));
 });
 
 setTimeout(() => {

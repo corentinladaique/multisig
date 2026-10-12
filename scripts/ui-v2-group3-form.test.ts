@@ -94,7 +94,7 @@ check('7. Review conserve runPipeline (aucun pipeline duplique)', () => {
 
 check('8. simulation reelle affichee uniquement si disponible', () => {
   assert.ok(NEW.includes("'Simulation succeeded'"), 'bloc simulation reelle dans New Proposal');
-  assert.ok(NEW.includes('simulation.estimatedCreatorBalanceDelta'), 'cout issu de la simulation reelle');
+  assert.ok(NEW.includes('reviewedSnapshot.estimatedCreatorBalanceDelta'), 'cout issu de la simulation reelle (via l instantane revu)');
   assert.ok(REVIEW.includes('simulationPassed'), 'la revue ne montre la simulation que sur drapeau');
   assert.ok(REVIEW.includes('{simulationPassed ? ('), 'bloc Simulation passed conditionnel');
   assert.ok(REVIEW.includes('Simulation passed') && REVIEW.includes('The transaction is valid.'), 'libelles simulation');
@@ -109,10 +109,15 @@ check('9. aucun cout fictif', () => {
 });
 
 check('10. aucun lamport au premier niveau', () => {
-  assert.ok(!NEW.includes('Amount (lamports)'), 'aucun libelle Amount (lamports)');
-  assert.ok(!NEW.includes('} lamports'), 'aucun affichage lamports brut');
-  assert.ok(!NEW.includes('lamports`'), 'aucun affichage lamports brut');
-  assert.ok(!NEW.includes('lamports):'), 'aucun affichage lamports brut');
+  // « Premier niveau » = tout ce qui PRECEDE la section repliable « Advanced
+  // diagnostics ». Le cout EXACT en lamports y est desormais AUTORISE (mission :
+  // la valeur exacte reste accessible dans les diagnostics replies), mais jamais
+  // dans le parcours principal.
+  const MAIN = NEW.slice(0, NEW.indexOf('accessibilityLabel="Toggle advanced diagnostics"'));
+  assert.ok(!MAIN.includes('Amount (lamports)'), 'aucun libelle Amount (lamports)');
+  assert.ok(!MAIN.includes('} lamports'), 'aucun affichage lamports brut');
+  assert.ok(!MAIN.includes('lamports`'), 'aucun affichage lamports brut');
+  assert.ok(!MAIN.includes('lamports):'), 'aucun affichage lamports brut');
   // Les details techniques sont bien confines a la section repliable.
   assert.ok(NEW.includes('accessibilityLabel="Toggle advanced diagnostics"'), 'section repliable presente');
   assert.ok(REVIEW.includes('Advanced diagnostics'), 'revue : diagnostics replies');
@@ -123,7 +128,9 @@ check('11. CTA accessible avec clavier (KeyboardAvoidingView + scroll)', () => {
   assert.ok(NEW.includes('<KeyboardAvoidingView behavior="padding"'), 'KeyboardAvoidingView conserve');
   assert.ok(NEW.includes('<ScrollView'), 'scroll present');
   const cta = NEW.indexOf('>Review proposal<');
-  const scrollEnd = NEW.indexOf('</ScrollView>');
+  // Le parcours principal est le DERNIER ScrollView : l'écran de SUCCES (état
+  // terminal) en possede un, place plus haut dans le fichier.
+  const scrollEnd = NEW.lastIndexOf('</ScrollView>');
   assert.ok(cta > 0 && scrollEnd > cta, 'le CTA reste dans le flux de scroll');
   assert.ok(!NEW.includes("position: 'absolute'"), 'aucun CTA flottant');
   assert.ok(NEW.includes('paddingBottom: 160'), 'padding bas adapte au clavier');

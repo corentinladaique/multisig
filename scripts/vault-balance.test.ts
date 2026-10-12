@@ -153,9 +153,10 @@ check('9. le solde est relu avant toute execution', () => {
   // Protection FONCTIONNELLE (jamais un simple commentaire francais) : la
   // relecture du solde vit DANS le chemin d'execution, avant tout envoi.
   assert.ok(
-    // La lecture est desormais bornee par un try/catch (aucun retour muet si le
-    // RPC est injoignable), mais elle reste AVANT toute signature.
-    source.includes('freshLamports = await readVaultBalance();'),
+    // La lecture du solde vit desormais dans le module PUR d'ordonnancement,
+    // branchee ici : son rejet est CAPTURE (aucun retour muet si le RPC est
+    // injoignable), et elle reste AVANT toute signature/envoi.
+    source.includes('readBalance: readVaultBalance'),
     'la relecture pre-execution doit exister',
   );
   const runExecution = source.slice(
@@ -184,7 +185,7 @@ check('9. le solde est relu avant toute execution', () => {
 check('10. apres execution verifiee, le solde est rafraichi', () => {
   const source = readFileSync('src/screens/ProposalDetailsScreen.tsx', 'utf8');
   assert.ok(
-    source.includes('if (result.verified) void readVaultBalance();'),
+    source.includes('if (sent.verified) void readVaultBalance();'),
     'le solde doit etre relu apres une execution verifiee',
   );
 });

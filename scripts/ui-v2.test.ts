@@ -54,7 +54,7 @@ check('2. Inbox absent de l ecran deconnecte', () => {
   // vault : sa position dans le fichier ne dit plus si elle est visible.
   // L'intention est donc verifiee sur son GATE — rendue seulement si le wallet
   // est connecte — ce qui est plus direct que comparer deux positions.
-  const inbox = CONNECT.indexOf('accessibilityLabel="Open multisig inbox"');
+  const inbox = CONNECT.indexOf('accessibilityLabel="Select multisig"');
   assert.ok(inbox > 0, 'l entree Inbox existe');
   const gate = CONNECT.slice(Math.max(0, inbox - 400), inbox);
   assert.ok(
@@ -65,22 +65,45 @@ check('2. Inbox absent de l ecran deconnecte', () => {
 });
 
 check('3. Loader manuel absent de l ecran deconnecte', () => {
-  // Le bloc de chargement est desormais EXTRAIT dans une constante declaree
-  // avant le rendu : sa POSITION dans le fichier ne dit plus ou il s'affiche.
-  // L'intention d'origine est donc verifiee sur ses POINTS DE RENDU — il n'est
-  // monte que derriere la frontiere « ecran connecte ».
+  // Le bloc de chargement est EXTRAIT dans une constante declaree avant le
+  // rendu : sa POSITION dans le fichier ne dit plus ou il s'affiche. L'intention
+  // d'origine est donc verifiee sur ses POINTS DE RENDU — il n'est monte que
+  // derriere la frontiere « ecran connecte ».
   assert.equal(
     CONNECT.split('multisigLoaderBlock').length - 1,
     3,
-    'une definition + deux points de rendu',
+    'une definition + deux points de rendu (carte vide + bloc de gestion)',
+  );
+  // ADAPTATION (option A) : plus AUCUN rendu n'est inconditionnel. La carte
+  // d'etat vide revele le bloc par `addMultisigOpen || choosingVault` ; le bloc
+  // de gestion du Home charge le REPLIE par defaut et le deplie par
+  // `addMultisigOpen`. Les deux intentions d'origine (jamais sur l'ecran
+  // deconnecte, jamais au demarrage) restent verifiees.
+  assert.equal(
+    CONNECT.split('{addMultisigOpen || choosingVault ? multisigLoaderBlock : null}').length - 1,
+    1,
+    'un seul rendu conditionnel (carte d etat vide : addMultisigOpen OU choix)',
   );
   assert.equal(
     CONNECT.split('{addMultisigOpen ? multisigLoaderBlock : null}').length - 1,
-    2,
-    'les deux rendus sont conditionnels',
+    1,
+    'le bloc de gestion du Home charge est replie par defaut (addMultisigOpen)',
   );
-  const first = CONNECT.indexOf('{addMultisigOpen ? multisigLoaderBlock : null}');
-  assert.ok(first > homeStart, 'le premier rendu est dans le Home connecte');
+  assert.equal(
+    CONNECT.split('{multisigLoaderBlock}').length - 1,
+    0,
+    'plus de rendu inconditionnel : le bloc n est jamais permanent',
+  );
+  const first = CONNECT.indexOf('{addMultisigOpen || choosingVault ? multisigLoaderBlock : null}');
+  assert.ok(first > homeStart, 'le rendu conditionnel est dans le Home connecte');
+  const collapsed = CONNECT.indexOf('{addMultisigOpen ? multisigLoaderBlock : null}');
+  assert.ok(collapsed > homeStart, 'le rendu replie est dans le Home connecte');
+  // Le controle repliable « More » reste SUPPRIME ; « Switch multisig » et le
+  // bloc « Multisig address » restent presents.
+  assert.ok(!CONNECT.includes('▾ More') && !CONNECT.includes('▸ More'), 'aucun glyphe « More »');
+  assert.ok(!CONNECT.includes('Toggle more actions'), 'plus de bouton « More »');
+  assert.ok(CONNECT.includes('label="Switch multisig"'), 'Switch multisig present');
+  assert.ok(CONNECT.includes('label="Multisig address"'), 'bloc Multisig address present');
 });
 
 check('4. Diagnostics absents du Connect principal', () => {

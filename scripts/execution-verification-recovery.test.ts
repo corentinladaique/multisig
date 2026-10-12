@@ -151,7 +151,7 @@ check('11. libelles renommes presents', () => {
   assert.ok(CREATE.includes('{members.length} valid signer addresses'));
   assert.ok(CREATE.includes('No duplicate addresses'));
   assert.ok(CREATE.includes('Good to know'));
-  assert.ok(CREATE.includes('Signers ({members.length} added)'));
+  assert.ok(CREATE.includes('<Text style={styles.sectionTitle}>Signers</Text>'));
   assert.ok(CREATE.includes("'Vault ready'"));
   assert.ok(CREATE.includes('Vault ready'));
   assert.ok(CREATE.includes('View proposals'));
@@ -235,14 +235,25 @@ check('16. aucune seconde execution possible depuis la revue', () => {
   assert.ok(!EXECUTE_REVIEW.includes('signAndSendProposalExecution'), 'aucune reconstruction');
 });
 
-check('17. approbation signee non verifiee : copie humaine + ton neutre', () => {
+check('17. approbation signee non verifiee : copie humaine + ton ambre (jamais rouge)', () => {
   assert.ok(DETAILS.includes("const APPROVAL_SENT_TITLE = 'Approval sent';"));
   assert.ok(
     DETAILS.includes(
       "'Verification is temporarily unavailable. Multisig will check again when the network connection returns.'",
     ),
   );
-  assert.ok(DETAILS.includes("tone={approvalNetworkFailure ? 'warning' : 'error'}"));
+  // Panneau d'approbation : ton AVERTISSEMENT (ambre) — une annulation de
+  // preparation n'est jamais presentee comme une erreur rouge.
+  const APPROVAL_ERROR_PANEL = DETAILS.slice(
+    DETAILS.indexOf("approvalError !== null &&\n        actionState !== 'executed' &&"),
+    DETAILS.indexOf("{approvalResult !== null && actionState !== 'executed' &&"),
+  );
+  assert.ok(APPROVAL_ERROR_PANEL.length > 0, 'panneau present');
+  assert.ok(APPROVAL_ERROR_PANEL.includes('tone="warning"'), 'panneau ambre');
+  assert.ok(
+    !APPROVAL_ERROR_PANEL.includes("tone={approvalNetworkFailure ? 'warning' : 'error'}"),
+    'plus de ton rouge sur un echec d approbation',
+  );
 });
 
 check('18. recu d approbation : plus de signature complete ni d adresse de compte', () => {
@@ -255,25 +266,34 @@ check('18. recu d approbation : plus de signature complete ni d adresse de compt
 });
 
 check('19. creation de proposition : un seul dialogue, lisible, sans detail de compte', () => {
-  assert.ok(NEW_PROPOSAL.includes("'Create this proposal?'"));
+  // Titre EXACT du dialogue unique (mission : « Create this proposal on Devnet? »).
+  assert.ok(NEW_PROPOSAL.includes("'Create this proposal on Devnet?'"));
   assert.ok(!NEW_PROPOSAL.includes('Confirm creation'), 'un seul dialogue');
   assert.ok(!NEW_PROPOSAL.includes('member(s)'), 'plus de member(s)');
   assert.ok(
     !NEW_PROPOSAL.includes('You will sign ONE transaction creating two accounts'),
     'plus de detail de construction',
   );
-  assert.ok(NEW_PROPOSAL.includes('Creating the proposal does not move the funds.'));
-  assert.ok(NEW_PROPOSAL.includes("text: 'Create proposal'"));
+  // La phrase « ne deplace pas les fonds » vit desormais dans l'etape Review ;
+  // le dialogue porte la nouvelle explication « This records the proposal on-chain ».
+  assert.ok(NEW_PROPOSAL.includes('This records the proposal on-chain.'));
+  assert.ok(NEW_PROPOSAL.includes("text: 'Create'"));
   assert.ok(NEW_PROPOSAL.includes('Estimated creation cost:'), 'cout conserve');
-  assert.ok(NEW_PROPOSAL.includes("abbreviateAddress(destination)"), 'destination raccourcie');
+  // Destination COMPLETE dans la confirmation (plus jamais raccourcie) : elle
+  // doit etre verifiable avant toute signature.
+  assert.ok(
+    NEW_PROPOSAL.includes('Destination: ${reviewedSnapshot.destination}'),
+    'destination complete, verifiable avant signature',
+  );
+  assert.ok(!NEW_PROPOSAL.includes('abbreviateAddress(destination)'), 'plus de destination raccourcie');
 });
 
 check('20. montant de confirmation formate en SOL lisible (0.2, pas 0.200000000)', () => {
   const dialog = NEW_PROPOSAL.slice(
-    NEW_PROPOSAL.indexOf("'Create this proposal?'"),
-    NEW_PROPOSAL.indexOf("text: 'Create proposal'"),
+    NEW_PROPOSAL.indexOf("'Create this proposal on Devnet?'"),
+    NEW_PROPOSAL.indexOf("text: 'Create'"),
   );
-  assert.ok(dialog.includes('formatSolAmount(build.request?.lamports ?? 0)'));
+  assert.ok(dialog.includes('formatSolAmount(reviewedSnapshot.amountLamports)'));
   assert.ok(!dialog.includes('formatSol('), 'jamais 9 decimales dans la confirmation');
 });
 

@@ -41,7 +41,7 @@ const LOOKUP = readFileSync('src/squads/useMultisigLookup.ts', 'utf8');
 
 // Bloc du handler unique de chargement manuel.
 const handlerStart = CONNECT.indexOf('const onLoadMultisig = useCallback');
-const handlerEnd = CONNECT.indexOf('}, [msig, multisigInput]);', handlerStart);
+const handlerEnd = CONNECT.indexOf('}, [archive.archive, msig, multisigInput, registry.entries]);', handlerStart);
 const HANDLER = CONNECT.slice(handlerStart, handlerEnd + 1);
 
 check('1. Entree appelle le handler existant', () => {

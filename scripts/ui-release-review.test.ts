@@ -73,7 +73,7 @@ check('3. Learn n utilisa plus deux contenants imbriques', () => {
 });
 
 check('4. Inbox disponible n utilise pas le style disabled', () => {
-  const idx = HOME.indexOf('accessibilityLabel="Open multisig inbox"');
+  const idx = HOME.indexOf('accessibilityLabel="Select multisig"');
   assert.ok(idx !== -1, 'le bouton Inbox existe');
   const block = HOME.slice(idx, idx + 420);
   // Inbox est disponible en permanence : jamais l'etat disabled. Il est rendu
@@ -110,7 +110,9 @@ check('8. Memo reste present', () => {
 
 check('9. Review proposal reste dans le flux de scroll', () => {
   const cta = NEW.indexOf('<Text style={styles.buttonText}>Review proposal</Text>');
-  const scrollEnd = NEW.indexOf('</ScrollView>');
+  // L'écran de SUCCES (état terminal) possede son propre ScrollView, place AVANT
+  // dans le fichier : on borne donc au DERNIER ScrollView (le parcours principal).
+  const scrollEnd = NEW.lastIndexOf('</ScrollView>');
   assert.ok(cta !== -1 && scrollEnd !== -1);
   assert.ok(cta < scrollEnd, 'le CTA ne doit pas sortir du ScrollView');
   assert.ok(!NEW.includes('position: \'absolute\''), 'aucun CTA flottant/sticky');

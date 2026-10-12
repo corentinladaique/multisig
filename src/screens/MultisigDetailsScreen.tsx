@@ -21,6 +21,8 @@ import type { ReviewGuardContext } from '../wallet/useWalletGuard';
 import { connection } from '../solana/connection';
 import { loadMultisig, MultisigLookupError, type MultisigView } from '../squads/multisig';
 import { loadSingleProposalView, useProposals, type ProposalView } from '../squads/proposals';
+import { type ProposalFilterGroup } from '../squads/proposalFilters';
+import { resolveReturnFilter } from '../ui/proposalReturnFilter';
 import type { TransactionReviewModel } from '../types/transactionReview';
 import { colors, radii, spacing, typography } from '../ui/theme';
 import { Card, DevnetPill, InfoBox, InfoText, ListRow, PillButton } from '../ui/v2/primitives';
@@ -79,6 +81,11 @@ export function MultisigDetailsScreen({
   const [proposalsOpen, setProposalsOpen] = useState(false);
   // Proposition ouverte depuis la liste (lecture seule).
   const [openProposal, setOpenProposal] = useState<ProposalView | null>(null);
+  // Filtre To do / Open / Done, POSSEDE ICI : il doit survivre au demontage de
+  // la liste (ouvrir une proposition monte un autre ecran). Origine memorisee
+  // pour le retour quand la categorie a change pendant la consultation.
+  const [proposalFilter, setProposalFilter] = useState<ProposalFilterGroup>('todo');
+  const [openProposalOrigin, setOpenProposalOrigin] = useState<ProposalFilterGroup>('todo');
   // Creation d'une nouvelle proposition (transfert SOL simple).
   const [newProposalOpen, setNewProposalOpen] = useState(false);
   // Vue Receive SOL (informative) : reutilise le ReceiveScreen du Groupe 1.
@@ -277,6 +284,7 @@ export function MultisigDetailsScreen({
       <NewProposalScreen
         address={view.address}
         members={view.members}
+        threshold={view.threshold}
         onBack={() => setNewProposalOpen(false)}
         onCreatedVerified={reloadFromChain}
         onDone={() => {
@@ -321,10 +329,24 @@ export function MultisigDetailsScreen({
         guardContext={guardContext}
         index={openProposal.index}
         members={view.members}
-        onBack={() => {
+        onBack={(verifiedStatus) => {
           // Retour depuis le detail : relecture de la liste, sinon une
           // proposition executee resterait dans To do / Open.
           setOpenProposal(null);
+          // FILTRE DE RETOUR : origine gardee SAUF si la categorie VERIFIEE
+          // on-chain a change (ex. executee pendant la consultation -> Done).
+          // `verifiedStatus === null` (aucune relecture) : on ne devine rien.
+          setProposalFilter(
+            resolveReturnFilter(openProposalOrigin, verifiedStatus, {
+              index: openProposal.index,
+              approvals: openProposal.approvals,
+              threshold: view.threshold,
+              approvedAddresses: openProposal.approvedAddresses,
+              walletAddress,
+              walletCanApprove: walletAddress !== null && votingMembers.includes(walletAddress),
+              walletCanExecute: walletAddress !== null && executingMembers.includes(walletAddress),
+            }),
+          );
           void reloadFromChain();
         }}
         proposal={{
@@ -345,8 +367,13 @@ export function MultisigDetailsScreen({
       <ProposalListScreen
         decodedModelFor={decodedModelFor}
         executingMembers={executingMembers}
+        filter={proposalFilter}
+        onFilterChange={setProposalFilter}
         onBack={() => setProposalsOpen(false)}
-        onOpenProposal={(proposal) => setOpenProposal(proposal)}
+        onOpenProposal={(proposal) => {
+          setOpenProposalOrigin(proposalFilter);
+          setOpenProposal(proposal);
+        }}
         onRefresh={reloadFromChain}
         proposals={proposals}
         refreshing={refreshing}
@@ -398,7 +425,7 @@ export function MultisigDetailsScreen({
         ) : null}
 
         {state.status === 'error' ? (
-          <InfoBox glyph="⚠" style={styles.errorBox} tone="error">
+          <InfoBox glyph="⚠" style={[styles.errorBox, styles.warningBox]} tone="error">
             <InfoText tone="error">{state.message}</InfoText>
             <Pressable
               accessibilityRole="button"
@@ -446,7 +473,7 @@ export function MultisigDetailsScreen({
             {/* VAULT VIDE — avertissement honnete, sans pretendre que la
                 creation d'une proposition est impossible (elle reste permise). */}
             {vaultIsEmpty ? (
-              <InfoBox glyph="⚠" style={styles.emptyBox} tone="warning">
+              <InfoBox glyph="⚠" style={[styles.emptyBox, styles.warningBox]} tone="warning">
                 <InfoText tone="warning">The vault is empty.</InfoText>
                 <InfoText tone="warning">
                   Receive Devnet SOL before executing a transfer.
@@ -685,6 +712,14 @@ const styles = StyleSheet.create({
   emptyBox: {
     marginTop: spacing.md,
   },
+  // Correctif LOCAL (primitive partagée figée par un test) : cf. NewProposalScreen.
+  // Les DEUX encarts qui portent ce style ont un corps TITRE + contenu
+  // supplémentaire (message d'erreur + bouton « Retry » ; « The vault is empty. »
+  // + phrase). Centrer verticalement contre tout le bloc décrochait le glyphe ⚠
+  // de son titre ; `alignItems: 'flex-start'` le ramène sur la PREMIÈRE ligne.
+  // Corps multi-lignes → hauteur de rangée donnée par le corps : aucun
+  // déséquilibre réintroduit. Aucune couleur ni condition changée.
+  warningBox: { alignItems: 'flex-start', padding: spacing.lg },
   actionRow: {
     flexDirection: 'row',
     marginTop: spacing.lg,

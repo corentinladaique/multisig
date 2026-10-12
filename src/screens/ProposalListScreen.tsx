@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import {
   ActivityIndicator,
   BackHandler,
@@ -58,6 +58,8 @@ const EMPTY_STATE: Record<ProposalFilterGroup, { title: string; body?: string }>
 export function ProposalListScreen({
   decodedModelFor,
   executingMembers = [],
+  filter,
+  onFilterChange,
   onBack,
   onOpenProposal,
   onRefresh,
@@ -74,6 +76,9 @@ export function ProposalListScreen({
   decodedModelFor?: (index: number) => TransactionReviewModel | null;
   /** Adresses des membres porteurs du droit d'exécution (filtre To do). */
   executingMembers?: readonly string[];
+  /** Filtre SÉLECTIONNÉ, POSSÉDÉ par l'appelant (survit au démontage de l'écran). */
+  filter: ProposalFilterGroup;
+  onFilterChange: (group: ProposalFilterGroup) => void;
   onBack: () => void;
   /** Ouvre le détail d'une proposition (lecture seule). */
   onOpenProposal?: (proposal: ProposalView) => void;
@@ -159,6 +164,8 @@ export function ProposalListScreen({
         <ProposalListBody
           busy={busy}
           decodedModelFor={decodedModelFor}
+          filter={filter}
+          onFilterChange={onFilterChange}
           onOpenProposal={onOpenProposal}
           proposals={proposals}
           threshold={threshold}
@@ -180,6 +187,8 @@ export function ProposalListScreen({
 export function ProposalListBody({
   busy,
   decodedModelFor,
+  filter,
+  onFilterChange,
   onOpenProposal,
   proposals,
   threshold,
@@ -189,6 +198,12 @@ export function ProposalListBody({
 }: {
   busy: boolean;
   decodedModelFor?: (index: number) => TransactionReviewModel | null;
+  /**
+   * Filtre SÉLECTIONNÉ, POSSÉDÉ par l'appelant : il doit survivre au démontage
+   * de ce corps (ouvrir une proposition démonte la liste, pas son parent).
+   */
+  filter: ProposalFilterGroup;
+  onFilterChange: (group: ProposalFilterGroup) => void;
   onOpenProposal?: (proposal: ProposalView) => void;
   proposals: ProposalsState;
   threshold: number;
@@ -196,8 +211,6 @@ export function ProposalListBody({
   walletCanApprove: boolean;
   walletCanExecute: boolean;
 }) {
-  const [filter, setFilter] = useState<ProposalFilterGroup>('todo');
-
   // Classement LOCAL : aucune I/O, aucune valeur inventée.
   const rows = (proposals.list?.proposals ?? []).map((proposal) => {
     const input = {
@@ -235,7 +248,7 @@ export function ProposalListBody({
               accessibilityState={{ selected: active }}
               accessibilityLabel={`Show ${entry.label} proposals`}
               key={entry.key}
-              onPress={() => setFilter(entry.key)}
+              onPress={() => onFilterChange(entry.key)}
               style={({ pressed }) => [
                 styles.filterPill,
                 active && styles.filterPillActive,
@@ -259,7 +272,7 @@ export function ProposalListBody({
 
       {/* Liste périmée conservée (jamais supprimée en silence). */}
       {proposals.stale && proposals.list !== null ? (
-        <InfoBox glyph="⚠" style={styles.infoBox} tone="warning">
+        <InfoBox glyph="⚠" style={[styles.infoBox, styles.warningBox]} tone="warning">
           <InfoText tone="warning">
             Showing the last successfully read list. Refresh failed:{' '}
             {proposals.error ?? 'unknown error'}
@@ -268,7 +281,7 @@ export function ProposalListBody({
       ) : null}
 
       {proposals.status === 'error' ? (
-        <InfoBox glyph="⚠" style={styles.infoBox} tone="error">
+        <InfoBox glyph="⚠" style={[styles.infoBox, styles.warningBoxTop]} tone="error">
           <InfoText tone="error">{proposals.error ?? 'Reading proposals failed.'}</InfoText>
           <Pressable
             accessibilityRole="button"
@@ -519,6 +532,16 @@ const styles = StyleSheet.create({
   infoBox: {
     marginTop: spacing.md,
   },
+  // Correctif LOCAL (primitive partagée figée par un test) : cf. NewProposalScreen.
+  // `alignItems: 'center'` + `padding: spacing.lg` équilibrent l'encart warning
+  // à contenu COURT (la liste périmée : un seul paragraphe, le glyphe ⚠, sans
+  // `lineHeight`, laissait le vide sous le texte).
+  warningBox: { alignItems: 'center', padding: spacing.lg },
+  // Variante HAUT : l'encart d'erreur de lecture porte un TITRE (1re ligne) PUIS
+  // un bouton « Retry » ; centré contre le bloc, le glyphe ⚠ se décrochait du
+  // titre. En HAUT il reste sur la PREMIÈRE ligne (corps multi-lignes → aucun
+  // déséquilibre réintroduit).
+  warningBoxTop: { alignItems: 'flex-start', padding: spacing.lg },
   note: {
     color: colors.textMuted,
     fontSize: typography.secondary,

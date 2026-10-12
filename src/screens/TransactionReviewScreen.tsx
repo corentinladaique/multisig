@@ -17,6 +17,8 @@ import { BackHandler, Pressable, ScrollView, StyleSheet, Text, View } from 'reac
 import { PublicKey } from '@solana/web3.js';
 import * as multisig from '@sqds/multisig';
 
+import { showsPreExecutionCopy } from '../ui/proposalDisplayState';
+
 import {
   isAlreadyApprovedVerdict,
   useWalletGuard,
@@ -68,6 +70,11 @@ function rawLamports(field: ReviewField<SolAmount>): string | null {
 export interface TransactionReviewScreenProps {
   model: TransactionReviewModel;
   onBack: () => void;
+  /**
+   * §1 — Etat TERMINAL verifie (proposition executee). La revue ne doit alors
+   * PLUS afficher de copie d'AVANT execution : le transfert a deja eu lieu.
+   */
+  executed?: boolean;
   /** Données déjà chargées, injectées par l'appelant. Aucun RPC dans le guard. */
   guardContext?: ReviewGuardContext | null;
   /**
@@ -105,6 +112,7 @@ export function computeCanConfirm(
 export function TransactionReviewScreen({
   model,
   onBack,
+  executed = false,
   guardContext = null,
   onCreate,
   simulationPassed = false,
@@ -296,22 +304,33 @@ export function TransactionReviewScreen({
       {/* 9. Lecture seule : aucun CTA d'approbation ici, on informe seulement. */}
       <Text style={styles.fieldLabel}>Approval</Text>
       <Text style={styles.fieldNote}>
-        {canConfirm
-          ? 'Guard and allowlist are satisfied. Approval is performed from Proposal Details.'
-          : 'Approval is not available for this proposal in its current state.'}
+        {showsPreExecutionCopy(executed)
+          ? canConfirm
+            ? 'Guard and allowlist are satisfied. Approval is performed from Proposal Details.'
+            : 'Approval is not available for this proposal in its current state.'
+          : 'This proposal has been executed. No further approval is possible.'}
       </Text>
 
-      {/* 10. Rappel de sécurité sur le déclenchement de l'exécution. */}
-      <InfoBox glyph="ℹ" style={styles.infoBox}>
-        <InfoText>
-          The transfer occurs only after the approval threshold is reached and an
-          authorized member executes the proposal.
-        </InfoText>
-      </InfoBox>
+      {/* 10. §1 — Rappel de securite SEULEMENT si l'execution est encore a venir. */}
+      {showsPreExecutionCopy(executed) ? (
+        <InfoBox glyph="ℹ" style={styles.infoBox}>
+          <InfoText>
+            The transfer occurs only after the approval threshold is reached and an
+            authorized member executes the proposal.
+          </InfoText>
+        </InfoBox>
+      ) : (
+        <InfoBox style={styles.infoBox}>
+          <InfoText>
+            The approval threshold was reached and this transfer has been executed
+            on-chain.
+          </InfoText>
+        </InfoBox>
+      )}
 
       {/* 11. Avertissement ou prochaine etape */}
       {needsWarning || (guard.status === 'blocked' && !showUserState) ? (
-        <InfoBox glyph="⚠" style={styles.infoBox} tone="warning">
+        <InfoBox glyph="⚠" style={[styles.infoBox, styles.warningBox]} tone="warning">
           {model.decodeStatus !== 'decoded' ? (
             <InfoText tone="warning">
               {model.decodeStatus === 'partial'
@@ -425,6 +444,12 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm,
   },
   infoBox: { marginTop: spacing.md },
+  // Correctif LOCAL (primitive partagée figée par un test) : cf. NewProposalScreen.
+  // L'unique encart qui porte ce style a un corps multi-lignes (avertissement de
+  // décodage + raisons + notes). Centrer verticalement contre tout le bloc
+  // décrochait le glyphe ⚠ de la PREMIÈRE ligne ; `alignItems: 'flex-start'` l'y
+  // ramène. Hauteur de rangée donnée par le corps : aucun déséquilibre.
+  warningBox: { alignItems: 'flex-start', padding: spacing.lg },
   previewBanner: {
     backgroundColor: colors.warningSoft,
     borderColor: colors.warningSoft,

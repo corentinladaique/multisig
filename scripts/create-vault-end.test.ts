@@ -86,9 +86,27 @@ check('12. aucun handler de creation duplique', () => {
 });
 
 check('13/14. Back conserve le draft, sortie explicite confirmee', () => {
-  assert.ok(CREATE.includes("Alert.alert('Discard vault setup?'"));
-  assert.ok(CREATE.includes("'Continue editing'"), 'action Keep editing existante');
-  assert.ok(CREATE.includes('Discard vault setup'));
+  assert.ok(CREATE.includes("Alert.alert('Cancel vault setup?'"));
+  assert.ok(CREATE.includes("'Keep editing'"), 'action Keep editing existante');
+  // Les trois chaines exactes de la boite : titre, annulation douce, sortie.
+  assert.ok(CREATE.includes("Alert.alert('Cancel vault setup?', 'Your current setup will be lost.'"));
+  assert.ok(CREATE.includes("{ style: 'cancel', text: 'Keep editing' }"));
+  assert.ok(
+    /style: 'destructive', text: 'Cancel' \}/.test(CREATE),
+    'le bouton de sortie reste destructif et intitule Cancel',
+  );
+  // Le corps de la boite est inchange.
+  assert.ok(CREATE.includes("'Your current setup will be lost.'"), 'corps de la boite inchange');
+  // Le controle en haut a gauche du wizard s'intitule desormais Cancel (les 5
+  // etapes partagent le meme Pressable) : l ancien libelle du controle a disparu.
+  assert.ok(
+    CREATE.includes('<Text style={styles.ghostActionText}>Cancel</Text>'),
+    'le controle du wizard affiche Cancel',
+  );
+  assert.ok(
+    !CREATE.includes('<Text style={styles.ghostActionText}>Discard vault setup</Text>'),
+    'l ancien libelle du controle a disparu',
+  );
   assert.ok(!CREATE.includes('Cancel and back to inbox'), 'libelle ambigu supprime');
   assert.ok(!/\{ style: 'cancel', text: 'Cancel' \}[\s\S]{0,80}setStep/.test(CREATE), 'Back ne detruit rien');
 });

@@ -39,10 +39,16 @@ import { DevnetPill, InfoText } from '../ui/v2/primitives';
  */
 export function OnboardingScreen({
   initialProfile,
+  onClose,
   onSkip,
   onFinish,
 }: {
   initialProfile: LearningProfile;
+  // Etape 1 uniquement : il n'y a pas d'etape precedente, la fleche « ‹ »
+  // FERME donc le parcours — strictement l'equivalent du retour Android
+  // (`onboarding.close()` cote ConnectScreen). Optionnel pour ne pas coupler
+  // l'ecran a un seul appelant ; absent = la fleche ne fait rien.
+  onClose?: () => void;
   onSkip: (profile: LearningProfile) => void;
   onFinish: (profile: LearningProfile) => void;
 }) {
@@ -95,7 +101,14 @@ export function OnboardingScreen({
               <Text style={styles.backGlyph}>‹</Text>
             </Pressable>
           ) : (
-            <View style={styles.backSpacer} />
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Close"
+              onPress={onClose}
+              style={({ pressed }) => [styles.backButton, pressed && styles.backButtonPressed]}
+            >
+              <Text style={styles.backGlyph}>‹</Text>
+            </Pressable>
           )}
           <DevnetPill />
         </View>

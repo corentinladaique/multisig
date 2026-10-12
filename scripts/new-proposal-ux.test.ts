@@ -3,7 +3,6 @@ import { readFileSync } from 'node:fs';
 
 import {
   buildProposalCreation,
-  PROPOSAL_CREATION_EXPLAINERS,
 } from '../src/squads/buildProposalCreation';
 import {
   hasInvalidDestinationError,
@@ -55,11 +54,11 @@ check('1. Amount : state initial vide', () => {
   assert.ok(!PROPOSAL.includes("useState('0"));
 });
 
-check('2. "e.g. 0.02" est uniquement un placeholder', () => {
-  assert.ok(PROPOSAL.includes('placeholder="e.g. 0.02"'));
+check('2. "e.g. 300" est uniquement un placeholder', () => {
+  assert.ok(PROPOSAL.includes('placeholder="e.g. 300"'));
   // Jamais affecté à un state ni utilisé comme valeur.
   assert.ok(!PROPOSAL.includes("setSolText('e.g."));
-  assert.ok(!PROPOSAL.includes('= \'e.g. 0.02\''));
+  assert.ok(!PROPOSAL.includes('= \'e.g. 300\''));
   assert.ok(PROPOSAL.includes('value={solText}'));
 });
 
@@ -71,7 +70,7 @@ check('3. le placeholder ne débloque pas le CTA', () => {
 });
 
 check('4. le placeholder ne produit aucun lamport', () => {
-  const parsed = parseSolToLamports('e.g. 0.02');
+  const parsed = parseSolToLamports('e.g. 300');
   assert.equal(parsed.ok, false);
   const empty = parseSolToLamports('');
   assert.ok(!empty.ok && empty.reason === 'empty');
@@ -114,7 +113,7 @@ check('7. "Review proposal" utilise le handler existant', () => {
 
 check('8. aucun build/RPC/wallet/envoi déclenché par un placeholder', () => {
   // Le placeholder n'apparaît que comme attribut d'entrée.
-  assert.equal((PROPOSAL.match(/placeholder="e\.g\. 0\.02"/g) ?? []).length, 1);
+  assert.equal((PROPOSAL.match(/placeholder="e\.g\. 300"/g) ?? []).length, 1);
   assert.equal((PROPOSAL.match(/placeholder="e\.g\. 0\.001"/g) ?? []).length, 1);
   for (const forbidden of ['signAndSendTransactions', 'signTransaction', 'sendRawTransaction']) {
     const inputBlock = PROPOSAL.slice(
@@ -133,15 +132,22 @@ check('9. message redondant supprimé', () => {
   assert.ok(!PROPOSAL.includes(">Enter an amount<"));
 });
 
-check('10. bloc technique replié par défaut', () => {
+check('10. bloc éducatif replié par défaut, copie HUMAINE fixe', () => {
   assert.ok(PROPOSAL.includes("const [howItWorksOpen, setHowItWorksOpen] = useState(false);"));
-  assert.ok(PROPOSAL.includes("'How proposal creation works'"));
+  assert.ok(PROPOSAL.includes('label="How proposal creation works"'), 'section explicative presente');
+  assert.ok(PROPOSAL.includes('expanded={howItWorksOpen}'));
   assert.ok(PROPOSAL.includes('{howItWorksOpen ? ('));
-  assert.ok(PROPOSAL.includes('accessibilityState={{ expanded: howItWorksOpen }}'));
-  // Aucune information supprimée : les explications restent dans la section.
-  assert.ok(PROPOSAL.includes('PROPOSAL_CREATION_EXPLAINERS'), 'explications importées');
-  assert.equal(PROPOSAL_CREATION_EXPLAINERS.length, 3);
-  assert.ok(PROPOSAL.includes('explainers.map((warning) => ('));
+  // Copie HUMAINE imposée, seule information rendue par cette section.
+  assert.ok(
+    PROPOSAL.includes('Creating a proposal records the transfer instructions on Devnet.'),
+    'phrase humaine présente',
+  );
+  assert.ok(PROPOSAL.includes('Funds only move'), 'suite de la phrase humaine');
+  // Les explications d implementation ne sont PLUS importées ni rendues.
+  assert.ok(
+    !PROPOSAL.includes('PROPOSAL_CREATION_EXPLAINERS'),
+    'explications d implementation absentes du rendu',
+  );
 });
 
 check('11. destination vide : aucune erreur rendue, code interne jamais affiche', () => {

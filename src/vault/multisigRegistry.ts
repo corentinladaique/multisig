@@ -166,6 +166,49 @@ export function upsertEntry(
   return { version: REGISTRY_VERSION, entries: [...others, entry] };
 }
 
+/**
+ * Entree « placeholder » : ecriture automatique d'un vault charge vu comme
+ * INCONNU (nom vide, aucun label, provenance `manual`). C'est exactement la
+ * forme produite par l'effet de chargement reussi de l'ecran d'accueil.
+ */
+function isPlaceholderEntry(entry: MultisigRegistryEntry): boolean {
+  return (
+    entry.source === 'manual' &&
+    entry.vaultName.trim().length === 0 &&
+    Object.keys(entry.memberLabels).length === 0
+  );
+}
+
+/** Une entree porte plus d'information qu'un placeholder : elle ne doit pas etre downgradee. */
+function carriesData(entry: MultisigRegistryEntry): boolean {
+  return (
+    entry.source === 'created' ||
+    entry.vaultName.trim().length > 0 ||
+    Object.keys(entry.memberLabels).length > 0
+  );
+}
+
+/**
+ * Upsert PROTEGE : ne downgrade JAMAIS une entree existante plus riche (nom,
+ * labels, provenance `created`) vers un placeholder `manual` vide.
+ *
+ * C'est la garde qui empeche une ecriture automatique (« vault charge encore
+ * inconnu du registre ») d'effacer le nom et les labels d'un vault CREÉ ou
+ * renomme — le seul cas ou un ecrasement est un bug, jamais une intention.
+ * Toute autre ecriture (creation, renommage avec un nom non vide) remplace
+ * normalement, en preservant le reste du registre.
+ */
+export function upsertEntryPreserving(
+  registry: MultisigRegistry,
+  entry: MultisigRegistryEntry,
+): MultisigRegistry {
+  const existing = findEntry(registry, entry.address);
+  if (existing !== null && isPlaceholderEntry(entry) && carriesData(existing)) {
+    return registry;
+  }
+  return upsertEntry(registry, entry);
+}
+
 export function removeEntry(registry: MultisigRegistry, address: string): MultisigRegistry {
   const target = address.trim();
   return {

@@ -53,7 +53,12 @@ check('3. Wallet label utilise une couleur lisible', () => {
 });
 
 check('4. Technical details utilise une couleur lisible', () => {
-  assert.ok(CONNECT.includes('detailsToggleText: {\n    color: colors.textSecondary'));
+  // Le controle repliable « More » (et ses styles dedies `detailsToggle` /
+  // `detailsToggleText`) est SUPPRIME : le bloc de gestion du Home s'affiche en
+  // permanence. L'assertion conserve sa force sur la couleur lisible restante
+  // (memberLine -> theme.textSecondary) et verrouille en plus l'absence des
+  // styles dedies au controle replie.
+  assert.ok(!CONNECT.includes('detailsToggle'), 'plus de style de controle « More »');
   assert.ok(CONNECT.includes('memberLine: {\n    color: colors.textSecondary'));
 });
 

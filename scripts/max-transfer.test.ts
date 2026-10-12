@@ -148,7 +148,7 @@ check('15. Max ne sollicite jamais le wallet', () => {
 check('12. changer le buffer invalide le pipeline', () => {
   const screen = readFileSync('src/screens/NewProposalScreen.tsx', 'utf8');
   assert.ok(
-    screen.includes('}, [build, bufferText]);'),
+    screen.includes('}, [build, bufferText, memo, destination]);'),
     'la simulation doit etre invalidee par un changement de buffer',
   );
 });

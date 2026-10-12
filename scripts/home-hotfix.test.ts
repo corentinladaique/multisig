@@ -140,7 +140,7 @@ check('5/6/7. Max : toute modification invalide le resume et l avertissement', (
 
   assert.ok(PROPOSAL.includes('{maxSummaryVisible && maxPlan !== null ? ('), 'le resume est conditionne');
   assert.ok(
-    PROPOSAL.includes('}, [build, bufferText]);'),
+    PROPOSAL.includes('}, [build, bufferText, memo, destination]);'),
     'une modification invalide build, preflight et simulation',
   );
 });

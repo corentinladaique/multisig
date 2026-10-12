@@ -30,7 +30,6 @@ import { colors, radii, spacing, typography } from '../ui/theme';
 import { Card, DevnetPill, InfoBox, InfoText, PillButton } from '../ui/v2/primitives';
 import {
   estimateRemainingBalance,
-  formatSol,
   describeTransferSource,
   lamportsToSolDisplay,
 } from '../wallet/vaultBalance';
@@ -55,22 +54,36 @@ import {
   executionNotAvailableDetail,
 } from '../squads/proposalActionState';
 import { abbreviateAddress, type TransactionReviewModel } from '../types/transactionReview';
+import {
+  effectiveProposalDisplay,
+  type ProposalDisplaySource,
+} from '../ui/proposalDisplayState';
 import { computeCanConfirm, TransactionReviewScreen } from './TransactionReviewScreen';
 import { formatMwaError } from '../wallet/mwaDiagnostics';
 import { buildOperationReport, classifyOperationResult, describeAttemptOutcome, isTemporaryNetworkFailure } from '../wallet/operationState';
+import {
+  isNetworkFailure,
+  NETWORK_INCIDENT_BODY,
+  NETWORK_INCIDENT_REASSURANCE,
+  NETWORK_INCIDENT_TITLE,
+} from '../ui/networkFailure';
 import {
   forgetPendingSubmission,
   pendingSubmissionFor,
   rememberPendingSubmission,
 } from '../wallet/pendingSubmissionMemory';
 import { signingStateTitle, type SigningState } from '../wallet/signingWindow';
+import { runGuardedExecution } from '../wallet/guardedExecution';
 
 /**
- * Message d'échec homogène : la machine d'état parle d'abord (pour ne jamais
- * présenter « signature obtenue » comme un échec), puis le diagnostic MWA
- * d'origine est repris verbatim avec son code.
+ * Annulation de préparation : rien n'a été signé, rien n'a été envoyé. Copie
+ * COURTE et humaine ; le détail technique brut reste réservé au repli
+ * « Troubleshooting details ».
  */
-function describeOperationFailure(result: {
+const PREPARATION_CANCELLED_TITLE = 'Preparation was cancelled';
+const PREPARATION_CANCELLED_BODY = 'Nothing was signed and nothing was sent.';
+
+type OperationFailureResult = {
   confirmed?: boolean;
   errorCode?: string | null;
   errorMessage: string | null;
@@ -78,30 +91,66 @@ function describeOperationFailure(result: {
   signingState?: SigningState;
   validationErrors: string[];
   verified: boolean;
-}): string {
+};
+
+/**
+ * Titre humain d'un échec : la machine d'état parle d'abord (pour ne jamais
+ * présenter « signature obtenue » comme un échec). L'état de signature du
+ * module prime : il distingue « requête expirée avant signature » de « signée,
+ * confirmation en attente ».
+ */
+function operationFailureTitle(result: OperationFailureResult): string {
   const evidence = {
     confirmed: result.confirmed === true,
     readBackVerified: result.verified,
     signatureObtained: result.signature !== null,
   };
-  // L'état de signature du module prime : il distingue « requête expirée
-  // avant signature » de « signée, confirmation en attente ».
-  const title =
-    result.signingState !== undefined
-      ? signingStateTitle(result.signingState)
-      : buildOperationReport({
-          evidence,
-          state: classifyOperationResult(evidence),
-        }).title;
-  const detail =
-    result.errorMessage !== null
-      ? formatMwaError({
-          code: result.errorCode ?? null,
-          message: result.errorMessage,
-          step: 'signAndSendTransactions',
-        })
-      : result.validationErrors.join(' ');
-  return `${title} ${detail}`;
+  return result.signingState !== undefined
+    ? signingStateTitle(result.signingState)
+    : buildOperationReport({
+        evidence,
+        state: classifyOperationResult(evidence),
+      }).title;
+}
+
+/** Diagnostic MWA d'origine, repris verbatim avec son code. */
+function operationFailureDetail(result: OperationFailureResult): string {
+  return result.errorMessage !== null
+    ? formatMwaError({
+        code: result.errorCode ?? null,
+        message: result.errorMessage,
+        step: 'signAndSendTransactions',
+      })
+    : result.validationErrors.join(' ');
+}
+
+/**
+ * Message d'échec homogène : titre humain puis diagnostic MWA d'origine.
+ */
+function describeOperationFailure(result: OperationFailureResult): string {
+  return `${operationFailureTitle(result)} ${operationFailureDetail(result)}`;
+}
+
+/**
+ * Affichage d'un échec d'APPROBATION.
+ *
+ * Sans signature, la copie est HUMAINE et courte (« Preparation was cancelled »)
+ * et le détail brut part dans le diagnostic (repli « Troubleshooting details ») :
+ * une annulation de préparation n'est jamais présentée comme un pavé technique.
+ * Avec une signature, le couple titre + détail reste inchangé.
+ */
+function describeApprovalFailure(result: OperationFailureResult): {
+  message: string;
+  diagnostic: string;
+} {
+  const diagnostic = `${operationFailureTitle(result)} ${operationFailureDetail(result)}`;
+  if (result.signature === null) {
+    return {
+      diagnostic,
+      message: `${PREPARATION_CANCELLED_TITLE}\n${PREPARATION_CANCELLED_BODY}`,
+    };
+  }
+  return { diagnostic, message: diagnostic };
 }
 
 /**
@@ -112,6 +161,11 @@ const EXECUTION_SENT_TITLE = 'Transaction sent';
 const EXECUTION_UNVERIFIED_MESSAGE =
   'Verification is temporarily unavailable. Multisig will check again when the network connection returns.';
 const EXECUTION_CHECK_FAILED_MESSAGE = 'Verification failed — nothing was sent by this check.';
+/**
+ * Copie EXACTE d'un doublon concurrent : l'invocation deja en cours detient le
+ * verrou. Jamais « awaiting verification » ici : aucun envoi n'a encore eu lieu.
+ */
+const EXECUTION_ALREADY_STARTING = 'Execution is already starting.';
 /** Approbation : meme contrat que l'execution (envoi signe != echec). */
 const APPROVAL_SENT_TITLE = 'Approval sent';
 const APPROVAL_UNVERIFIED_MESSAGE =
@@ -170,7 +224,7 @@ export function ProposalDetailsScreen({
   index: number;
   /** Membres et rôles lus dans le multisig (déjà chargés par le détail). */
   members: readonly { address: string; roles: readonly string[] }[];
-  onBack: () => void;
+  onBack: (verifiedStatus: string | null) => void;
   proposal: {
     approvedAddresses: string[];
     status: ProposalStatusKind;
@@ -193,9 +247,21 @@ export function ProposalDetailsScreen({
   const [selfGuardContext, setSelfGuardContext] = useState<ReviewGuardContext | null>(null);
   const [decoding, setDecoding] = useState(false);
   const [decodeError, setDecodeError] = useState<string | null>(null);
+  // Repli du détail technique brut de l'incident réseau : FERMÉ par défaut.
+  const [showTechnicalDetails, setShowTechnicalDetails] = useState(false);
+
+  // Approbateurs RELUS on-chain : source unique du libelle « Already approved ».
+  // Jamais un etat memoire local seul — une reouverture repart de la chaine.
+  // §1 : declare AVANT la derivation du contexte de revue pour que CETTE lecture
+  // soit la source unique de TOUS les affichages (jamais les props d'ouverture).
+  const [onchainApproval, setOnchainApproval] = useState<{
+    approvedAddresses: string[];
+    status: string;
+  } | null>(null);
+  const displayProposal = effectiveProposalDisplay(onchainApproval, proposal);
 
   const deriveGuardContext = useCallback(
-    (reviewModel: TransactionReviewModel): ReviewGuardContext | null => {
+    (reviewModel: TransactionReviewModel, display: ProposalDisplaySource): ReviewGuardContext | null => {
       try {
         const multisigPda = new PublicKey(address);
         const [vaultPda] = multisig.getVaultPda({ index: 0, multisigPda });
@@ -210,9 +276,10 @@ export function ProposalDetailsScreen({
             vaultAddress: vaultPda.toBase58(),
           },
           proposal: {
-            approvedAddresses: proposal.approvedAddresses,
+            // §1 : compteurs et statut issus de la MEME source verifiee.
+            approvedAddresses: [...display.approvedAddresses],
             index,
-            status: proposal.status,
+            status: display.status,
           },
           review: reviewModel,
           walletAddress,
@@ -221,7 +288,7 @@ export function ProposalDetailsScreen({
         return null;
       }
     },
-    [address, index, members, proposal.approvedAddresses, proposal.status, threshold, walletAddress],
+    [address, index, members, threshold, walletAddress],
   );
 
   /** Relecture + décodage : aucune signature, aucun envoi, aucun wallet. */
@@ -238,20 +305,20 @@ export function ProposalDetailsScreen({
           multisigAddress: address,
           network: 'devnet',
           proposalIndex: index,
-          proposalStatus: proposal.status,
+          proposalStatus: displayProposal.status,
           signerWallet: walletAddress ?? 'Unknown',
           vaultAddress: vaultPda.toBase58(),
         },
         index,
       );
       setSelfModel(result.model);
-      setSelfGuardContext(deriveGuardContext(result.model));
+      setSelfGuardContext(deriveGuardContext(result.model, displayProposal));
     } catch (caught: unknown) {
       setDecodeError(caught instanceof Error ? caught.message : String(caught));
     } finally {
       setDecoding(false);
     }
-  }, [address, deriveGuardContext, index, proposal.status, walletAddress]);
+  }, [address, deriveGuardContext, displayProposal, index, walletAddress]);
 
   // Relecture canonique à l'ouverture, quel que soit le chemin (Home ou Inbox) :
   // le modèle et le contexte fournis par l'appelant servent d'affichage immédiat,
@@ -301,10 +368,12 @@ export function ProposalDetailsScreen({
   const approvalAttemptedRef = useRef(false);
   // Approbateurs RELUS on-chain : source unique du libelle « Already approved ».
   // Jamais un etat memoire local seul — une reouverture repart de la chaine.
-  const [onchainApproval, setOnchainApproval] = useState<{
-    approvedAddresses: string[];
-    status: string;
-  } | null>(null);
+  // §1 — Verite on-chain si elle a ete relue, sinon donnee fournie par
+  // l'appelant. MEME source que le contexte de revue et le decode du modele :
+  // aucune surface ne peut plus diverger.
+  const effectiveApprovedAddresses = displayProposal.approvedAddresses;
+  const effectiveProposalStatus = displayProposal.status;
+  const verifiedStatusForReturn = onchainApproval === null ? null : onchainApproval.status;
   // Relecture seule « Check approval again ».
   const [checkingApproval, setCheckingApproval] = useState(false);
   const [approvalCheckReport, setApprovalCheckReport] = useState<string | null>(null);
@@ -323,6 +392,14 @@ export function ProposalDetailsScreen({
   const verificationAttemptsRef = useRef(0);
   const verificationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const verificationInFlightRef = useRef(false);
+  // Reprises AUTOMATIQUES bornees de la VERIFICATION D'APPROBATION : miroir
+  // exact du mecanisme d'execution, avec des refs SEPAREES (les deux minuteurs
+  // ne doivent jamais se marcher dessus). LECTURES seules : aucune signature,
+  // aucune reconstruction, aucun envoi, aucun wallet.
+  const [approvalVerificationRound, setApprovalVerificationRound] = useState(0);
+  const approvalVerificationAttemptsRef = useRef(0);
+  const approvalVerificationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const approvalCheckInFlightRef = useRef(false);
   // Anti-chevauchement de la relecture de retour au premier plan.
   const refreshInFlightRef = useRef(false);
   const unmountedRef = useRef(false);
@@ -341,9 +418,6 @@ export function ProposalDetailsScreen({
   );
   // (Derivation placee APRES la declaration d'executionResult : voir plus bas.)
 
-  // Verite on-chain si elle a ete relue, sinon donnee fournie par l'appelant.
-  const effectiveApprovedAddresses = onchainApproval?.approvedAddresses ?? proposal.approvedAddresses;
-  const effectiveProposalStatus = onchainApproval?.status ?? proposal.status;
   const walletAlreadyApproved = walletHasApproved(effectiveApprovedAddresses, walletAddress);
 
   const canConfirm =
@@ -464,87 +538,103 @@ export function ProposalDetailsScreen({
         });
 
   const runExecution = async () => {
-    // Contrôle pré-exécution : le solde est RELU ici. L'affichage précédent ne
-    // remplace jamais ce contrôle. Une lecture IMPOSSIBLE (DNS/RPC) ne doit pas
-    // faire rejeter cette fonction : c'etait un retour MUET, sans wallet et sans
-    // message. On traite l'echec comme « solde inconnu », exactement comme un
-    // `null` renvoye par la lecture elle-meme.
-    let freshLamports: number | null = null;
-    try {
-      freshLamports = await readVaultBalance();
-    } catch {
-      freshLamports = null;
-    }
-    if (
-      freshLamports !== null &&
-      isRecognizedTransfer &&
-      sourceVerdict.matches &&
-      amountLamports !== null &&
-      freshLamports < amountLamports
-    ) {
-      setExecutionError(
-        'Insufficient vault balance: the vault does not hold the amount this proposal moves. Nothing was sent.',
-      );
-      executionAttemptedRef.current = false;
-      setExecuting(false);
+    // VERROU DE PROPRIETE, teste SYNCHRONEMENT : un doublon concurrent sort ICI,
+    // AVANT de toucher a l'etat occupe de la premiere invocation (aucun
+    // remplacement de statut, aucune extinction de son spinner).
+    if (executionAttemptedRef.current) {
+      setExecutionError(EXECUTION_ALREADY_STARTING);
       return;
     }
-    if (approvalAttemptedRef.current || executionAttemptedRef.current) {
-      // Aucun chemin ne sort en silence : l'utilisateur voit toujours pourquoi.
-      setExecutionError(
-        'This execution was already attempted. Use Check execution again instead of sending it twice.',
-      );
-      return;
-    }
-    if (walletAddress === null) {
-      setExecutionError('No wallet connected: an execution must be signed by a member.');
-      return;
-    }
-    executionAttemptedRef.current = true;
     setExecuting(true);
-    setExecutionError(null);
-    setExecutionResult(null);
-    let signature: string | null = null;
     try {
-      const result = await signAndSendProposalExecution({
-        connection,
-        memberAddress: walletAddress,
-        multisigPda: address,
-        signAndSendTransactions,
-        threshold,
-        transactionIndex: index,
+      // L'ORDRE des operations et la PROPRIETE du verrou vivent dans un module
+      // PUR et testable (`src/wallet/guardedExecution.ts`). Le verrou est le ref
+      // ci-dessus : la seconde invocation est rejetee AVANT toute lecture, tout
+      // wallet et tout envoi, et seule la titulaire le rend.
+      const result = await runGuardedExecution(executionAttemptedRef, {
+        readBalance: readVaultBalance,
+        isInsufficientBalance: (freshLamports) =>
+          freshLamports !== null &&
+          isRecognizedTransfer &&
+          sourceVerdict.matches &&
+          amountLamports !== null &&
+          freshLamports < amountLamports,
+        approvalInFlight: () => approving,
+        hasUnverifiedExecutionSignature: () => unverifiedExecutionSignature !== null,
+        walletConnected: () => walletAddress !== null,
+        prepare: () => {
+          setExecutionError(null);
+          setExecutionResult(null);
+        },
+        signAndSend: () =>
+          signAndSendProposalExecution({
+            connection,
+            // Le module a deja exige un wallet connecte avant cet appel.
+            memberAddress: walletAddress as string,
+            multisigPda: address,
+            signAndSendTransactions,
+            threshold,
+            transactionIndex: index,
+          }),
       });
-      signature = result.signature;
-      setExecutionResult(result);
-      if (result.signature !== null) {
-        rememberPendingSubmission(proposalKey, result.signature);
-        setRememberedSignature(result.signature);
+      if (result.kind === 'blocked') {
+        if (result.reason === 'balance_unreadable') {
+          // P0.2 — Un rejet RPC/DNS ne sort JAMAIS en silence et n'ouvre jamais
+          // le wallet : message humain ici, detail brut dans Troubleshooting.
+          setExecutionDiagnostics((previous) => [...previous, result.detail ?? '']);
+          setExecutionError(
+            'Could not verify the vault balance. Nothing was sent. Check your connection and try again.',
+          );
+        } else if (result.reason === 'insufficient_balance') {
+          setExecutionError(
+            'Insufficient vault balance: the vault does not hold the amount this proposal moves. Nothing was sent.',
+          );
+        } else if (result.reason === 'approval_in_flight') {
+          setExecutionError('An approval is still being verified. Nothing was sent.');
+        } else if (result.reason === 'already_awaiting_verification') {
+          setExecutionError(
+            'An execution is already awaiting verification. Use Check execution again instead of sending it twice.',
+          );
+        } else if (result.reason === 'no_wallet') {
+          setExecutionError('No wallet connected: an execution must be signed by a member.');
+        } else {
+          // Doublon concurrent : aucune preuve d'envoi n'existe encore.
+          setExecutionError(EXECUTION_ALREADY_STARTING);
+        }
+        return;
+      }
+      if (result.kind === 'failed') {
+        setExecutionDiagnostics((previous) => [...previous, result.detail]);
+        setExecutionError(result.detail);
+        return;
+      }
+      // kind === 'sent' : le wallet a ete ouvert (au plus une fois) et un resultat
+      // existe. Une signature, quand elle existe, est une PREUVE — jamais le ref.
+      const sent = result.outcome;
+      setExecutionResult(sent);
+      if (sent.signature !== null) {
+        rememberPendingSubmission(proposalKey, sent.signature);
+        setRememberedSignature(sent.signature);
       }
       // Après une exécution vérifiée, le solde du vault a changé : on le relit.
-      if (result.verified) void readVaultBalance();
-      if (!result.verified) {
+      if (sent.verified) void readVaultBalance();
+      if (!sent.verified) {
         // Le detail BRUT part dans les diagnostics ; le bloc principal ne montre
         // jamais une pile Java. Sans signature, aucune copie « sent ».
-        const raw = describeOperationFailure(result);
+        const raw = describeOperationFailure(sent);
         setExecutionDiagnostics((previous) => [...previous, raw]);
         const networkFailure =
-          isTemporaryNetworkFailure(result.errorMessage ?? '') || isTemporaryNetworkFailure(raw);
+          isTemporaryNetworkFailure(sent.errorMessage ?? '') || isTemporaryNetworkFailure(raw);
         setExecutionError(
-          result.signature !== null && networkFailure
+          sent.signature !== null && networkFailure
             ? `${EXECUTION_SENT_TITLE}\n${EXECUTION_UNVERIFIED_MESSAGE}`
             : raw,
         );
       }
-    } catch (caught: unknown) {
-      const raw = caught instanceof Error ? caught.message : String(caught);
-      setExecutionDiagnostics((previous) => [...previous, raw]);
-      setExecutionError(
-        signature !== null && isTemporaryNetworkFailure(caught)
-          ? `${EXECUTION_SENT_TITLE}\n${EXECUTION_UNVERIFIED_MESSAGE}`
-          : raw,
-      );
     } finally {
-      if (signature === null) executionAttemptedRef.current = false;
+      // Rend l'etat « occupe » sur TOUS les chemins (succes, blocage, echec) :
+      // aucun spinner ne peut plus rester actif. Le verrou, lui, est rendu par le
+      // module — et uniquement par l'invocation qui l'avait acquis.
       setExecuting(false);
     }
   };
@@ -663,6 +753,20 @@ export function ProposalDetailsScreen({
         status: decoded.status.__kind,
       };
       setOnchainApproval(fresh);
+      // P0.4 — La relecture mettait a jour la CARTE mais laissait la TENTATIVE
+      // d'approbation (et son erreur) en l'etat : l'ecran pouvait afficher en
+      // meme temps « seuil atteint », « Approval sent », « Check approval again »
+      // et une ancienne erreur rouge. Des que la chaine PROUVE que ce wallet est
+      // approbateur, la tentative est reconciliee et l'erreur courante disparait.
+      if (walletAddress !== null && walletHasApproved(fresh.approvedAddresses, walletAddress)) {
+        setApprovalResult((previous) =>
+          previous === null
+            ? previous
+            : { ...previous, confirmationStatus: 'confirmed', confirmed: true, verified: true },
+        );
+        setApprovalError(null);
+        setApprovalCheckReport(null);
+      }
       return fresh;
     } catch {
       // Une lecture impossible ne fabrique aucun état : on garde le précédent.
@@ -795,6 +899,27 @@ export function ProposalDetailsScreen({
     approvalResult.signature !== null &&
     !approvalResult.verified &&
     isTemporaryNetworkFailure(approvalError ?? '');
+
+  // --- Incident « vérification réseau » UNIQUE --------------------------------
+  // Décodage impossible ou envoi signé non vérifié : c'est le MÊME problème
+  // (le réseau). On ne rend donc QU'UN panneau, en AMBRE, avec le texte humain
+  // et le détail brut replié — jamais trois encarts rouges pour un incident.
+  const decodeNetworkIncident = decodeError !== null && isNetworkFailure(decodeError);
+  const executionSentIncident =
+    (executionError !== null &&
+      !executed &&
+      (executionNetworkFailure || executionError.includes(EXECUTION_SENT_TITLE))) ||
+    (executionResult === null && rememberedSignature !== null && !executed);
+  // Le détail brut INTÉGRAL de l'incident (jamais tronqué) : l'erreur de
+  // décodage si elle existe, sinon les diagnostics d'exécution.
+  const networkIncidentRaw = decodeNetworkIncident
+    ? decodeError
+    : executionDiagnostics.length > 0
+      ? executionDiagnostics.join('\n')
+      : executionError;
+  // Une signature d'exécution mémorisée (aucun résultat encore) reste visible.
+  const networkIncidentSignature =
+    executionResult === null && !executed ? rememberedSignature : null;
   const latestCheckRef = useRef<() => void>(() => {});
   useEffect(() => {
     latestCheckRef.current = () => {
@@ -811,6 +936,12 @@ export function ProposalDetailsScreen({
       verificationTimerRef.current = null;
     }
     verificationAttemptsRef.current = 0;
+    // Meme remise a zero pour les reprises d'approbation.
+    if (approvalVerificationTimerRef.current !== null) {
+      clearTimeout(approvalVerificationTimerRef.current);
+      approvalVerificationTimerRef.current = null;
+    }
+    approvalVerificationAttemptsRef.current = 0;
     setExecutionResult(null);
     setExecutionError(null);
     setExecutionDiagnostics([]);
@@ -830,6 +961,10 @@ export function ProposalDetailsScreen({
       if (verificationTimerRef.current !== null) {
         clearTimeout(verificationTimerRef.current);
         verificationTimerRef.current = null;
+      }
+      if (approvalVerificationTimerRef.current !== null) {
+        clearTimeout(approvalVerificationTimerRef.current);
+        approvalVerificationTimerRef.current = null;
       }
     };
   }, []);
@@ -861,7 +996,8 @@ export function ProposalDetailsScreen({
    */
   const onCheckApprovalAgain = async () => {
     const signature = approvalResult?.signature ?? null;
-    if (signature === null || checkingApproval) return;
+    if (signature === null || checkingApproval || approvalCheckInFlightRef.current) return;
+    approvalCheckInFlightRef.current = true;
     const requestKey = proposalKeyRef.current;
     setCheckingApproval(true);
     setApprovalCheckReport('Checking the approval…');
@@ -903,6 +1039,8 @@ export function ProposalDetailsScreen({
         // Etat courant REUSSI : l'ancienne erreur disparait du bloc principal.
         // L'historique technique reste consultable dans Troubleshooting details.
         setApprovalError(null);
+        // L'etat est TRANCHE : plus aucune reprise automatique ne doit s'armer.
+        approvalVerificationAttemptsRef.current = MAX_VERIFICATION_ATTEMPTS;
       }
     } catch (caught: unknown) {
       const detail = isTemporaryNetworkFailure(caught)
@@ -911,9 +1049,43 @@ export function ProposalDetailsScreen({
       setApprovalCheckReport(detail);
       setApprovalDiagnostics((previous) => [...previous, detail]);
     } finally {
+      approvalCheckInFlightRef.current = false;
       setCheckingApproval(false);
+      setApprovalVerificationRound((round) => round + 1);
     }
   };
+
+  const latestApprovalCheckRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    latestApprovalCheckRef.current = () => {
+      void onCheckApprovalAgain();
+    };
+  });
+  // Une verification d'APPROBATION impossible POUR UNE RAISON RESEAU sur un
+  // envoi SIGNE : seul cas ou une reprise automatique est autorisee. Elle RELIT
+  // (statut de la signature + relecture de la Proposal), elle ne renvoie RIEN :
+  // aucun wallet, aucune signature, aucune reconstruction, aucun envoi. Miroir
+  // exact de la reprise d'execution, avec ses propres refs bornees.
+  useEffect(() => {
+    if (!approvalNetworkFailure) return;
+    if (approvalVerificationAttemptsRef.current >= MAX_VERIFICATION_ATTEMPTS) return;
+    const delay =
+      VERIFICATION_RETRY_DELAYS_MS[
+        Math.min(approvalVerificationAttemptsRef.current, VERIFICATION_RETRY_DELAYS_MS.length - 1)
+      ];
+    approvalVerificationAttemptsRef.current += 1;
+    approvalVerificationTimerRef.current = setTimeout(() => {
+      approvalVerificationTimerRef.current = null;
+      if (unmountedRef.current || approvalCheckInFlightRef.current) return;
+      latestApprovalCheckRef.current();
+    }, delay);
+    return () => {
+      if (approvalVerificationTimerRef.current !== null) {
+        clearTimeout(approvalVerificationTimerRef.current);
+        approvalVerificationTimerRef.current = null;
+      }
+    };
+  }, [approvalNetworkFailure, approvalVerificationRound]);
 
   const runApproval = async () => {
     if (model === null || allowlist === null || approvalAttemptedRef.current) return;
@@ -956,13 +1128,17 @@ export function ProposalDetailsScreen({
         void refreshProposalFromChain();
       }
       if (!result.verified) {
-        const failure = describeOperationFailure(result);
-        setApprovalError(failure);
-        setApprovalDiagnostics((previous) => [...previous, failure]);
+        // Copie HUMAINE dans le bloc principal ; le détail technique brut part
+        // dans « Troubleshooting details », jamais dans le panneau ambre.
+        const failure = describeApprovalFailure(result);
+        setApprovalError(failure.message);
+        setApprovalDiagnostics((previous) => [...previous, failure.diagnostic]);
       }
     } catch (caught: unknown) {
+      // La signature n'est posée qu'après un retour réussi : ici, rien n'a été
+      // signé. Même copie humaine, détail brut réservé à Troubleshooting.
       const detail = caught instanceof Error ? caught.message : String(caught);
-      setApprovalError(detail);
+      setApprovalError(`${PREPARATION_CANCELLED_TITLE}\n${PREPARATION_CANCELLED_BODY}`);
       setApprovalDiagnostics((previous) => [...previous, detail]);
     } finally {
       // Aucune signature obtenue : rien n'a ete produit, un nouvel essai reste
@@ -1019,7 +1195,7 @@ export function ProposalDetailsScreen({
 
   useEffect(() => {
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
-      onBack();
+      onBack(verifiedStatusForReturn);
       return true;
     });
     return () => subscription.remove();
@@ -1082,6 +1258,7 @@ export function ProposalDetailsScreen({
   if (reviewOpen && model !== null) {
     return (
       <TransactionReviewScreen
+        executed={executed}
         guardContext={effectiveGuardContext ?? null}
         model={model}
         onBack={() => setReviewOpen(false)}
@@ -1121,7 +1298,7 @@ export function ProposalDetailsScreen({
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Back to proposals"
-            onPress={onBack}
+            onPress={() => onBack(verifiedStatusForReturn)}
             style={({ pressed }) => [styles.backButton, pressed && styles.backButtonPressed]}
           >
             <Text style={styles.backGlyph}>‹</Text>
@@ -1243,21 +1420,23 @@ export function ProposalDetailsScreen({
         actionState !== 'executed' &&
         !approvalNetworkFailure &&
         !progress.reached ? (
-          /* Un envoi SIGNE non verifie n'est PAS un echec : ton neutre. */
+          /* Une annulation de preparation n'est PAS une erreur grave : ton
+             AVERTISSEMENT (ambre). Le detail technique brut vit dans
+             « Troubleshooting details ». */
           <InfoBox
             glyph="⚠"
             style={styles.infoBox}
-            tone={approvalNetworkFailure ? 'warning' : 'error'}
+            tone="warning"
           >
-            <InfoText tone={approvalNetworkFailure ? 'warning' : 'error'}>
-              {approvalNetworkFailure
-                ? `${APPROVAL_SENT_TITLE}\n${APPROVAL_UNVERIFIED_MESSAGE}`
-                : approvalError}
-            </InfoText>
+            <InfoText tone="warning">{approvalError}</InfoText>
           </InfoBox>
         ) : null}
 
         {approvalResult !== null && actionState !== 'executed' && !progress.reached ? (
+          // Sans signature, rien n'a ete envoye : le panneau ambre « Preparation
+          // was cancelled » ci-dessus porte DEJA le message unique — aucun doublon
+          // ici (le recu n'existe que pour une soumission signee).
+          approvalResult.signature === null ? null : (
           <View
             style={
               approvalOutcome !== null && approvalOutcome.tone === 'success'
@@ -1317,6 +1496,7 @@ export function ProposalDetailsScreen({
               <Text style={styles.fieldNote}>{approvalCheckReport}</Text>
             ) : null}
           </View>
+          )
         ) : null}
 
         {/* --- Progression : fusionnée dans la carte principale (aucun doublon). --- */}
@@ -1324,7 +1504,7 @@ export function ProposalDetailsScreen({
         {/* --- Execute : uniquement quand les guards l'autorisent. --- */}
         {executeState === 'available' ? (
           insufficientBalance ? (
-            <InfoBox glyph="⚠" style={styles.infoBox} tone="error">
+            <InfoBox glyph="⚠" style={[styles.infoBox, styles.warningBox]} tone="error">
               <InfoText tone="error">Insufficient vault balance</InfoText>
             </InfoBox>
           ) : (
@@ -1340,7 +1520,8 @@ export function ProposalDetailsScreen({
                 }
                 label={PROPOSAL_ACTION_LABELS.executeCta}
                 onPress={onExecute}
-                variant="danger"
+                /* Action POSITIVE : le rouge reste reserve aux echecs confirmes. */
+                variant="primary"
               />
               <Text style={styles.fieldNote}>
                 Executing submits the stored transaction to the vault. It is irreversible and
@@ -1365,7 +1546,6 @@ export function ProposalDetailsScreen({
           <View style={styles.executedCard}>
             <Text style={styles.executedCheck}>✓</Text>
             <Text style={styles.executedTitle}>Transaction executed</Text>
-            <Text style={styles.executedMeta}>{PROPOSAL_ACTION_LABELS.executed}</Text>
             <Text style={styles.fieldNote}>Proposal #{index}</Text>
             <Text style={styles.executedAmount}>
               {amountLamports === null ? 'Amount unavailable' : lamportsToSolDisplay(amountLamports)}
@@ -1396,37 +1576,27 @@ export function ProposalDetailsScreen({
         ) : null}
 
         {executionError !== null && !executed ? (
-          /* Un envoi SIGNE non encore verifie n'est PAS un echec : ton neutre. */
-          <InfoBox
-            glyph="⚠"
-            style={styles.infoBox}
-            tone={executionNetworkFailure ? 'warning' : 'error'}
-          >
-            <InfoText tone={executionNetworkFailure ? 'warning' : 'error'}>{executionError}</InfoText>
-          </InfoBox>
+          /* L'incident RESEAU d'un envoi signe est rendu UNE seule fois par le
+             panneau d'incident ci-dessous. Ici ne reste que la VRAIE erreur
+             d'execution, en rouge, avec son message d'origine. */
+          executionSentIncident ? null : (
+            <InfoBox
+              glyph="⚠"
+              style={styles.infoBox}
+              tone={executionNetworkFailure ? 'warning' : 'error'}
+            >
+              <InfoText tone={executionNetworkFailure ? 'warning' : 'error'}>{executionError}</InfoText>
+            </InfoBox>
+          )
         ) : null}
 
         {executionResult === null && rememberedSignature !== null && !executed ? (
           /* Envoi SIGNE d'un montage precedent de cet ecran (ou d'un ecran
              rouvert) : Execute n'est jamais repropose sans preuve on-chain ; la
-             main est laissee a la relecture. Ton neutre : etat INCONNU, pas echec. */
-          <InfoBox glyph="⚠" style={styles.infoBox} tone="warning">
-            <InfoText tone="warning">{EXECUTION_SENT_TITLE}</InfoText>
-            <InfoText tone="warning">{EXECUTION_UNVERIFIED_MESSAGE}</InfoText>
-            <Text selectable style={styles.fieldNote}>
-              Signature: {abbreviateAddress(rememberedSignature)}
-            </Text>
-            <PillButton
-              accessibilityLabel="Check execution again"
-              busy={checkingExecution}
-              disabled={checkingExecution}
-              label={checkingExecution ? 'Checking…' : 'Check execution again'}
-              onPress={() => {
-                void onCheckExecutionAgain();
-              }}
-              variant="secondary"
-            />
-          </InfoBox>
+             main est laissee a la relecture. Cet incident RESEAU (payload +
+             signature + reprise) est desormais rendu UNE seule fois par le
+             panneau d'incident ci-dessous — aucun doublon. */
+          null
         ) : null}
 
         {executionResult !== null && executeState !== 'executed' ? (
@@ -1434,14 +1604,20 @@ export function ProposalDetailsScreen({
             style={
               executionOutcome !== null && executionOutcome.tone === 'success'
                 ? styles.successBox
-                : styles.errorBox
+                : executionOutcome !== null && executionOutcome.tone === 'warning'
+                  ? /* Etat SIGNE / EN ATTENTE (transitoire) : AMBRE, jamais rouge —
+                       ce n'est pas un echec, la transaction a bien ete signee. */
+                    styles.warningPanel
+                  : styles.errorBox
             }
           >
             <Text
               style={
                 executionOutcome !== null && executionOutcome.tone === 'success'
                   ? styles.successText
-                  : styles.errorText
+                  : executionOutcome !== null && executionOutcome.tone === 'warning'
+                    ? styles.warningPanelText
+                    : styles.errorText
               }
             >
               {/* Sans signature, jamais « Sent » : le libellé vient du verdict. */}
@@ -1498,8 +1674,68 @@ export function ProposalDetailsScreen({
           <Text style={styles.fieldNote}>Decoding the transaction from the chain…</Text>
         ) : null}
 
-        {decodeError !== null ? (
-          <InfoBox glyph="⚠" style={styles.infoBox} tone="error">
+        {decodeNetworkIncident || executionSentIncident ? (
+          /* Panneau UNIQUE de l'incident RESEAU : un seul incident (le reseau),
+             un seul encart. Texte HUMAIN en tete ; le detail technique brut
+             reste accessible, INTEGRAL, derriere un repli FERME par defaut. */
+          <InfoBox glyph="⚠" style={[styles.infoBox, styles.warningBoxTop]} tone="warning">
+            <InfoText tone="warning">{NETWORK_INCIDENT_TITLE}</InfoText>
+            <InfoText tone="warning">{NETWORK_INCIDENT_BODY}</InfoText>
+            {decodeNetworkIncident ? (
+              <InfoText tone="warning">{NETWORK_INCIDENT_REASSURANCE}</InfoText>
+            ) : null}
+            {networkIncidentSignature !== null ? (
+              <Text selectable style={styles.fieldNote}>
+                Signature: {abbreviateAddress(networkIncidentSignature)}
+              </Text>
+            ) : null}
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Show technical details"
+              accessibilityState={{ expanded: showTechnicalDetails }}
+              onPress={() => setShowTechnicalDetails((open) => !open)}
+              style={styles.inlineAction}
+            >
+              <Text style={styles.inlineActionText}>
+                {showTechnicalDetails ? 'Hide technical details' : 'Show technical details'}
+              </Text>
+            </Pressable>
+            {showTechnicalDetails && networkIncidentRaw !== null ? (
+              <Text selectable style={styles.incidentRawDetails}>
+                {networkIncidentRaw}
+              </Text>
+            ) : null}
+            {decodeNetworkIncident ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Retry decoding this proposal"
+                onPress={() => {
+                  void runDecode();
+                }}
+                style={styles.inlineAction}
+              >
+                <Text style={styles.inlineActionText}>Retry decode</Text>
+              </Pressable>
+            ) : null}
+            {networkIncidentSignature !== null ? (
+              <PillButton
+                accessibilityLabel="Check execution again"
+                busy={checkingExecution}
+                disabled={checkingExecution}
+                label={checkingExecution ? 'Checking…' : 'Check execution again'}
+                onPress={() => {
+                  void onCheckExecutionAgain();
+                }}
+                variant="secondary"
+              />
+            ) : null}
+          </InfoBox>
+        ) : null}
+
+        {decodeError !== null && !decodeNetworkIncident ? (
+          /* VRAIE erreur de decodage (donnees invalides, compte absent) : elle
+             reste ROUGE, avec son message d'origine, et conserve la reprise. */
+          <InfoBox glyph="⚠" style={[styles.infoBox, styles.warningBoxTop]} tone="error">
             <InfoText tone="error">{decodeError}</InfoText>
             <Pressable
               accessibilityRole="button"
@@ -1560,12 +1796,6 @@ export function ProposalDetailsScreen({
                 <Text style={styles.fieldLabel}>Action</Text>
                 <Text style={styles.fieldValue}>{summary.action}</Text>
                 <Text selectable style={styles.monoValue}>Amount: {summary.amount}</Text>
-                {/* Valeur technique exacte (9 décimales, non arrondie) : le montant
-                    compact reste la seule information de premier niveau. */}
-                <Text selectable style={styles.monoValue}>
-                  Exact amount:{' '}
-                  {amountLamports === null ? 'unavailable' : `${formatSol(amountLamports)} SOL`}
-                </Text>
                 <Text style={styles.fieldLabel}>Destination</Text>
                 <Text selectable style={styles.monoValue}>
                   {fullDestination ?? summary.destination}
@@ -1581,10 +1811,15 @@ export function ProposalDetailsScreen({
                 <Text style={styles.fieldNote}>{sourceVerdict.label}</Text>
                 <Text style={styles.fieldNote}>{sourceVerdict.hint}</Text>
                 {/* Estimation LOCALE, jamais un solde inventé : « Not available »
-                    si la lecture du vault n'a pas abouti. */}
+                    si la lecture du vault n'a pas abouti. Formatage ASSAINI :
+                    `lamportsToSolDisplay` coupe les zéros de queue inutiles
+                    (« 0.080000000 » -> « 0.08 SOL », « 0 » -> « 0 SOL ») sans
+                    jamais masquer de décimale significative. */}
                 <Text style={styles.fieldLabel}>Estimated remaining balance</Text>
                 <Text selectable style={styles.monoValue}>
-                  {remaining.sol === null ? 'Not available' : `${remaining.sol} SOL`}
+                  {remaining.remainingLamports === null
+                    ? 'Not available'
+                    : lamportsToSolDisplay(remaining.remainingLamports)}
                 </Text>
                 <Text style={styles.fieldNote}>{remaining.reason}</Text>
               </>
@@ -1697,7 +1932,7 @@ export function ProposalDetailsScreen({
             <PillButton
               accessibilityLabel="Go back"
               label="Back"
-              onPress={onBack}
+              onPress={() => onBack(verifiedStatusForReturn)}
               variant={executed ? 'primary' : 'secondary'}
             />
           </View>
@@ -1882,9 +2117,40 @@ const styles = StyleSheet.create({
     fontSize: typography.secondary,
     fontWeight: '800',
   },
+  // Etat SIGNE / EN ATTENTE (transitoire) : encart AMBRE, jamais rouge.
+  warningPanel: {
+    backgroundColor: colors.warningSoft,
+    borderRadius: radii.field,
+    marginTop: spacing.md,
+    padding: spacing.md,
+  },
+  warningPanelText: {
+    color: colors.warning,
+    fontSize: typography.secondary,
+  },
+  // Detail technique brut de l'incident reseau : INTEGRAL, copiable, en retrait.
+  incidentRawDetails: {
+    color: colors.textMuted,
+    fontFamily: 'monospace',
+    fontSize: typography.caption,
+    marginTop: spacing.sm,
+  },
   infoBox: {
     marginTop: spacing.md,
   },
+  // Correctif LOCAL (la primitive partagée est figée par un test). `alignItems:
+  // 'center'` : le glyphe ⚠ a une boîte de ligne plus haute que le texte (il
+  // n'hérite pas du `lineHeight` de `InfoText`) ; en `flex-start` (défaut de la
+  // primitive) il gonflait la rangée et le texte, calé en haut, laissait plus
+  // d'espace sous lui qu'au-dessus. Padding `spacing.lg` : air interne
+  // symétrique. Aucune couleur ni condition changée.
+  warningBox: { alignItems: 'center', padding: spacing.lg },
+  // Variante HAUT : encarts dont le corps porte un TITRE (1re ligne) PUIS du
+  // contenu supplémentaire (phrase, bouton « Retry », divulgation). Centrer
+  // contre tout le bloc décrochait le glyphe ⚠ de son titre ; en HAUT il reste
+  // sur la PREMIÈRE ligne. Corps multi-lignes → hauteur de rangée donnée par le
+  // corps : aucun déséquilibre réintroduit. Contenu COURT : `warningBox`.
+  warningBoxTop: { alignItems: 'flex-start', padding: spacing.lg },
   button: {
     alignItems: 'center',
     borderRadius: radii.button,
@@ -1913,7 +2179,8 @@ const styles = StyleSheet.create({
   },
   inlineAction: {
     borderRadius: radii.pill,
-    marginTop: spacing.sm,
+    // Aération : 16 px entre actions empilées (avant : 8 px, trop serré).
+    marginTop: spacing.lg,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.xs,
   },

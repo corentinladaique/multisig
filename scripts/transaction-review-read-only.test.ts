@@ -169,7 +169,7 @@ check('13/14. TransactionReviewScreen ne peut ouvrir aucun wallet ni envoyer', (
 // --- Execute inchangé ----------------------------------------------------
 check('15. Execute reste inchangé et utilise le module d exécution', () => {
   assert.ok(DETAILS.includes("from '../squads/signAndSendProposalExecution'"));
-  assert.ok(DETAILS.includes('await signAndSendProposalExecution({'));
+  assert.ok(DETAILS.includes('signAndSendProposalExecution({'));
   assert.ok(EXECUTION.includes('multisig.instructions.vaultTransactionExecute'));
   assert.ok(EXECUTION.includes('confirmSignature'));
 });

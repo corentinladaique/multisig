@@ -162,7 +162,18 @@ export function CardsMark({ loop = false, size, solana = false, style, tile = fa
               key={i}
               style={[
                 styles.band,
-                { backgroundColor: mix(TILE_GRADIENT.from, TILE_GRADIENT.to, i / (TILE_BANDS - 1)) },
+                {
+                  backgroundColor: mix(TILE_GRADIENT.from, TILE_GRADIENT.to, i / (TILE_BANDS - 1)),
+                  // Chevauchement de 1 px : deux bandes voisines ne laissent
+                  // JAMAIS une couture sous-pixel où le fond `BRAND_BG` (mint
+                  // plus foncé) transparaît. C'est cette couture qui apparaissait
+                  // comme une LIGNE HORIZONTALE parasite en travers de la tuile.
+                  // Positions ABSOLUES (et non `flex: 1`) : la hauteur de chaque
+                  // bande est indépendante de l'arrondi au pixel du parent, donc
+                  // le rendu est identique quel que soit le contexte de layout.
+                  height: size / TILE_BANDS + 1,
+                  top: (size / TILE_BANDS) * i,
+                },
               ]}
             />
           ))
@@ -206,9 +217,11 @@ const styles = StyleSheet.create({
   card: {
     position: 'absolute',
   },
-  // Une bande du dégradé : empilées, elles le composent sans image ni lib.
+  // Une bande du dégradé : empilées en ABSOLU, elles le composent sans image ni
+  // lib et sans couture (chaque bande chevauche la suivante d'1 px).
   band: {
-    flex: 1,
-    width: '100%',
+    left: 0,
+    position: 'absolute',
+    right: 0,
   },
 });

@@ -120,7 +120,7 @@ export function MultisigInboxScreen({
         ))}
 
         {registry.warnings.length > 0 ? (
-          <InfoBox glyph="⚠" style={styles.infoBox} tone="warning">
+          <InfoBox glyph="⚠" style={[styles.infoBox, styles.warningBox]} tone="warning">
             {registry.warnings.map((warning) => (
               <InfoText key={warning} tone="warning">
                 {warning}
@@ -130,7 +130,7 @@ export function MultisigInboxScreen({
         ) : null}
 
         {registry.error !== null ? (
-          <InfoBox glyph="⚠" style={styles.infoBox} tone="error">
+          <InfoBox glyph="⚠" style={[styles.infoBox, styles.warningBox]} tone="error">
             <InfoText tone="error">{registry.error}</InfoText>
           </InfoBox>
         ) : null}
@@ -261,6 +261,10 @@ const styles = StyleSheet.create({
   infoBox: {
     marginTop: spacing.md,
   },
+  // Correctif LOCAL (primitive partagée figée par un test) : cf. NewProposalScreen.
+  // `alignItems: 'center'` + `padding: spacing.lg` équilibrent l'encart warning/
+  // error (le glyphe ⚠, sans `lineHeight`, laissait le vide sous le texte).
+  warningBox: { alignItems: 'center', padding: spacing.lg },
   note: {
     color: colors.textMuted,
     fontSize: typography.secondary,

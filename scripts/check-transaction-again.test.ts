@@ -197,7 +197,7 @@ check('16. plusieurs taps rapides : une seule relecture simultanee', () => {
 check('17/18. succes : Open vault et View proposals disponibles', () => {
   assert.ok(SUCCESS_BLOCK.includes('Open vault'));
   assert.ok(SUCCESS_BLOCK.includes('View proposals'));
-  assert.ok(SUCCESS_BLOCK.includes('onGoToInbox'));
+  assert.ok(SUCCESS_BLOCK.includes('onViewProposals'));
 });
 
 check('19. succes : retour Android vers Inbox', () => {

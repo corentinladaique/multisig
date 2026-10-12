@@ -73,7 +73,7 @@ check('7/8. nom vide : Review et Preview non ouvertes', () => {
     CREATE.split('onPress={goNext}').length - 1 === 1,
     'goNext ne doit etre branche que sur le CTA Continue',
   );
-  assert.ok(CREATE.includes("Alert.alert('Discard vault setup?'"), 'aucun chemin parallele');
+  assert.ok(CREATE.includes("Alert.alert('Cancel vault setup?'"), 'aucun chemin parallele');
 });
 
 check('9. protection du nom conservee sur Step 5 (defense en profondeur)', () => {

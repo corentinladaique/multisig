@@ -26,6 +26,7 @@ import {
   recommendationFor,
   recommendedThresholdFor,
 } from '../vault/thresholdRecommendation';
+import { thresholdGuidanceFor } from '../vault/thresholdGuidance';
 import { runMultisigCreationPreflight } from '../vault/multisigCreationPreflight';
 import {
   simulateMultisigCreation,
@@ -43,6 +44,7 @@ import {
   type MultisigCreationExpectation,
 } from '../vault/multisigCreationReadBack';
 import { useMultisigRegistry } from '../vault/useMultisigRegistry';
+import { useVaultUsage } from '../vault/useVaultUsage';
 import { formatMwaError } from '../wallet/mwaDiagnostics';
 import { AddressInput } from '../ui/AddressInput';
 import { SAFE_TOP_PADDING } from '../ui/safeAreaPadding';
@@ -117,6 +119,120 @@ function shortenSignature(signature: string | null | undefined): string {
   return `${signature.slice(0, 8)}…${signature.slice(-8)}`;
 }
 
+/**
+ * Nombre MAX de lignes de detail brut affichees dans le repli technique : au
+ * dela, le reste est annonce (« +N more… »). Le brut INTEGRAL reste accessible
+ * via « Show raw details » — aucune information n'est perdue.
+ */
+const TROUBLESHOOTING_MAX_LINES = 6;
+
+/** Motifs d'erreur reseau : ils se repetent mot pour mot a chaque compte lu. */
+const NETWORK_FAILURE_PATTERNS: RegExp[] = [
+  /Unable to resolve host/gi,
+  /java\.net\.[A-Za-z]+Exception/gi,
+  /UnknownHostException/gi,
+  /fetch failed/gi,
+  /Network request failed/gi,
+  /ECONNREFUSED/gi,
+  /ENOTFOUND/gi,
+  /EAI_AGAIN/gi,
+  /ETIMEDOUT/gi,
+  /socket hang up/gi,
+];
+
+/**
+ * Compte les repetitions d'une MEME erreur reseau : on retient le maximum des
+ * motifs (une meme repetition porte souvent plusieurs motifs), jamais leur
+ * cumul. Un message hors ligne repete trois fois donne donc 3, pas 9.
+ */
+function countNetworkFailures(text: string): number {
+  let count = 0;
+  for (const pattern of NETWORK_FAILURE_PATTERNS) {
+    count = Math.max(count, (text.match(pattern) ?? []).length);
+  }
+  return count;
+}
+
+/**
+ * Retire d'un message le fragment reseau repete (factorise dans la ligne
+ * reseau dediee) : le reste — prefixe / etape / annotation — est conserve.
+ */
+function stripNetworkNoise(message: string): string {
+  const index = message.search(
+    /fetch failed|java\.net\.[A-Za-z]+Exception|UnknownHostException|Network request failed|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|socket hang up/i,
+  );
+  if (index === -1) return message;
+  const head = message
+    .slice(0, index)
+    .replace(/[\s:—-]+$/, '')
+    .trim();
+  return head.length > 0 ? `${head} …` : '';
+}
+
+/**
+ * Condense les messages techniques bruts en un digest lisible SANS perdre
+ * l'information : dedoublonne les lignes identiques (×N), factorise l'erreur
+ * reseau repetee (hote injoignable) en UNE ligne avec le nombre de requetes
+ * concernees, puis plafonne l'affichage (le reste est annonce). Fonction PURE :
+ * aucune I/O, testable hors ligne.
+ */
+function condenseTroubleshootingDetails(messages: string[]): {
+  summary: string;
+  lines: string[];
+  hiddenCount: number;
+} {
+  const flat = messages
+    .map((message) => message.replace(/\s+/g, ' ').trim())
+    .filter((message) => message.length > 0);
+  const joined = flat.join(' ');
+  const networkCount = countNetworkFailures(joined);
+  const host = joined.match(/Unable to resolve host "([^"]+)"/i)?.[1] ?? null;
+  const exception = joined.match(/java\.net\.[A-Za-z]+Exception/)?.[0] ?? null;
+
+  const lines: string[] = [];
+  if (networkCount > 0) {
+    // Une seule mention de l'hote injoignable (et de l'exception), quel que
+    // soit le nombre de comptes interroges.
+    const label = exception ?? 'Network unreachable';
+    lines.push(
+      host !== null
+        ? `${label}: could not reach ${host} — ${networkCount} request${
+            networkCount > 1 ? 's' : ''
+          } failed.`
+        : `${label} — ${networkCount} request${networkCount > 1 ? 's' : ''} failed.`,
+    );
+  }
+
+  const counts = new Map<string, number>();
+  for (const message of flat) counts.set(message, (counts.get(message) ?? 0) + 1);
+  for (const [message, occurrences] of counts) {
+    const stripped = stripNetworkNoise(message);
+    const line = stripped.length > 0 ? stripped : message;
+    if (lines.includes(line)) continue;
+    lines.push(occurrences > 1 ? `${line} (×${occurrences})` : line);
+  }
+
+  const hiddenCount = Math.max(lines.length - TROUBLESHOOTING_MAX_LINES, 0);
+  return {
+    hiddenCount,
+    lines: lines.slice(0, TROUBLESHOOTING_MAX_LINES),
+    summary:
+      networkCount > 0
+        ? 'Vault preparation failed: the network was unreachable (step: Preparation).'
+        : 'Vault preparation failed (step: Preparation).',
+  };
+}
+
+/**
+ * Création ANNULÉE avant toute signature : copie COURTE et humaine, ton
+ * AVERTISSEMENT (une annulation n'est jamais une panne). Le détail technique brut
+ * reste réservé au repli « Troubleshooting details », jamais dans ce panneau.
+ * Textes validés par l'utilisateur.
+ */
+const CREATION_CANCELLED_TITLE = 'Creation was cancelled';
+const CREATION_CANCELLED_BODY =
+  'Nothing was signed and nothing was sent. Your vault was not created.';
+
 type MeasurableInput = TextInput & {
   measureInWindow?: (
     callback: (x: number, y: number, width: number, height: number) => void,
@@ -127,16 +243,22 @@ export function CreateVaultScreen({
   onCancel,
   onGoToInbox,
   onOpenVault,
+  onViewProposals,
 }: {
   onCancel: () => void;
-  /** Sortie vers l'inbox des multisigs connus (apres succes). */
+  /** Sortie vers l'inbox des multisigs connus : retour systeme apres succes. */
   onGoToInbox: () => void;
   /** Ouvre le vault cree, a partir de son adresse deja verifiee on-chain. */
   onOpenVault: (vault: { address: string; vaultName: string }) => void;
+  /** Bascule sur l'onglet Proposals du vault qui vient d'etre cree (lien de succes). */
+  onViewProposals: (vault: { address: string; vaultName: string }) => void;
 }) {
   const { account, connect, signAndSendTransactions } = useMobileWallet();
   // Registre local des multisigs connus (stockage seul, aucun RPC).
   const registry = useMultisigRegistry();
+  // Recence locale : un vault CREÉ devient le DERNIER UTILISE, exactement comme
+  // un vault charge avec succes — meme stockage local, aucun reseau.
+  const usage = useVaultUsage();
 
   const [step, setStep] = useState(1);
   const [vaultName, setVaultName] = useState('');
@@ -145,9 +267,10 @@ export function CreateVaultScreen({
   const [setupType, setSetupType] = useState<SetupType | null>(null);
   const [members, setMembers] = useState<VaultMemberDraft[]>([]);
   const [threshold, setThreshold] = useState(1);
-  // L'utilisateur a-t-il choisi le threshold explicitement ? Si non, deux
-  // membres obtiennent le defaut recommande (2 of 2) sans jamais ecraser un
-  // choix explicite (y compris 1 of 2).
+  // Le seuil a-t-il ete choisi EXPLICITEMENT par l'utilisateur sur le selecteur
+  // de l'etape 3 ? Tant que non, un vault de trois signataires prend le defaut
+  // recommande (2 of 3). Un choix explicite (y compris 1 of 3) n'est jamais
+  // ecrase. Choisir un SETUP ne compte PAS comme un choix de seuil.
   const [thresholdTouched, setThresholdTouched] = useState(false);
 
   const [pendingAddress, setPendingAddress] = useState('');
@@ -160,6 +283,9 @@ export function CreateVaultScreen({
   // Section repliable des diagnostics sur Step 5 : ouverte uniquement par un
   // tap explicite, jamais une etape obligatoire du parcours.
   const [troubleshootingOpen, setTroubleshootingOpen] = useState(false);
+  // Second niveau de repli (imbrique dans le premier) : le detail brut INTEGRAL
+  // reste consultable a la demande, sans etre jamais impose.
+  const [rawDetailsOpen, setRawDetailsOpen] = useState(false);
   // Reçu technique du succes : REPLIÉ par defaut. La signature COMPLÈTE n'apparait
   // qu'ici, sur demande explicite ; l'ecran n'affiche qu'une version abregee.
   const [receiptOpen, setReceiptOpen] = useState(false);
@@ -277,9 +403,29 @@ export function CreateVaultScreen({
   const mwaReport = operationReport?.mwa ?? null;
   const signingStateLabel =
     createResult?.signingState === undefined ? null : signingStateTitle(createResult.signingState);
+  // Message d'erreur wallet d'origine, VERBATIM. Le code MWA porte souvent la
+  // description COMPLÈTE (le message de l'exception en est alors le suffixe) :
+  // on retient le plus complet des deux pour ne JAMAIS répéter la phrase.
+  const rawWalletError = (() => {
+    const code = mwaReport?.code ?? null;
+    const message = mwaReport?.message ?? createResult?.errorMessage ?? null;
+    if (code !== null && (message === null || code.includes(message))) return code;
+    return message ?? createError;
+  })();
   const technicalErrors: string[] = [];
-  if (createResult?.errorMessage != null) technicalErrors.push(createResult.errorMessage);
-  for (const message of createResult?.validationErrors ?? []) technicalErrors.push(message);
+  if (nothingWasSent && rawWalletError !== null) {
+    // Échec AVANT toute signature : détail DISCRET et DÉDOUBLONNÉ (une seule
+    // mention du message wallet), jamais le pavé brut dans le panneau ambre.
+    // Le « : » de séparation devient « — » pour une ligne lisible (forme validée).
+    technicalErrors.push('Step: Preparation');
+    technicalErrors.push(`Wallet error: ${rawWalletError.replace(/:\s+/, ' — ')}`);
+  } else {
+    if (createResult?.errorMessage != null) technicalErrors.push(createResult.errorMessage);
+    for (const message of createResult?.validationErrors ?? []) technicalErrors.push(message);
+    // Échec hors des modules d'envoi (aucun createResult) : le message reste
+    // consultable ici, jamais en clair dans le panneau principal.
+    if (technicalErrors.length === 0 && createError !== null) technicalErrors.push(createError);
+  }
   if (checkError !== null && !technicalErrors.includes(checkError)) technicalErrors.push(checkError);
   const hasDiagnostics =
     // Apres une creation VERIFIEE, il n'y a aucun probleme : la section repliable
@@ -290,6 +436,11 @@ export function CreateVaultScreen({
       mwaReport !== null ||
       signingStateLabel !== null ||
       checkEvidence !== null);
+
+  // Digest LISIBLE du detail technique : resume humain court + lignes brutes
+  // condensees (dedoublonnees, reseau factorise, plafonnees). Le brut INTEGRAL
+  // reste consultable via le second repli « Show raw details ».
+  const troubleshootingDigest = condenseTroubleshootingDetails(technicalErrors);
 
   // --- Affichage du cout : TOUJOURS en SOL (jamais de lamports a l'ecran). ---
   const costTotalSol = creationCost === null ? null : lamportsToSolDisplay(creationCost.totalLamports);
@@ -329,17 +480,27 @@ export function CreateVaultScreen({
   // Plan technique : purement local (aucun RPC, aucune API Squads executee).
   const plan = useMemo(() => buildMultisigCreationPlan(request), [request]);
 
-  // Pour 2 ou 3 membres, le threshold recommande (2) est applique par defaut —
-  // sauf choix explicite de l'utilisateur, qui n'est jamais ecrase.
+  // Pour un vault de TROIS signataires, le threshold recommande (2 of 3) est
+  // applique par defaut — sauf choix explicite de l'utilisateur sur le selecteur
+  // de seuil (thresholdTouched). Les autres nombres de signataires ne recoivent
+  // aucun defaut force : leur comportement reste inchange.
   useEffect(() => {
     if (thresholdTouched) return;
-    if (members.length !== 2 && members.length !== 3) return;
+    if (members.length !== 3) return;
     const recommended = recommendedThresholdFor(members.length);
     if (threshold !== recommended) setThreshold(recommended);
   }, [members.length, threshold, thresholdTouched]);
 
   // Recommandation affichee (2 of 2 / 2 of 3), ou null.
   const thresholdRecommendation = recommendationFor(members.length);
+
+  // Guidance de seuil (ton + textes) du panneau « Threshold » : elle suit le
+  // seuil choisi pour un vault de trois signataires. `null` hors de ce cas.
+  const thresholdGuidance = thresholdGuidanceFor(
+    members.length,
+    threshold,
+    thresholdRecommendation,
+  );
 
   // Presets VISIBLES du wizard : le preset « 2 of 2 » n'est plus propose comme
   // point d'entree. Custom couvre TOUJOURS 2-of-2, 1-of-2 et toutes les
@@ -432,8 +593,9 @@ export function CreateVaultScreen({
   const chooseSetup = useCallback((type: SetupType, presetThreshold: number) => {
     setSetupType(type);
     setThreshold(presetThreshold);
-    // Choix explicite de l'utilisateur : le defaut recommande ne l'ecrase jamais.
-    setThresholdTouched(true);
+    // Choisir un SETUP n'est PAS un choix de seuil : le defaut recommande
+    // (2 of 3) reste applique tant que l'utilisateur n'a pas touche le
+    // selecteur de seuil a l'etape 3 (voir setThresholdTouched dans le rendu).
   }, []);
 
   const addConnectedWallet = useCallback(() => {
@@ -648,6 +810,13 @@ export function CreateVaultScreen({
               }`,
             );
           }
+          // Le vault CREÉ devient le DERNIER UTILISE (donc auto-charge a
+          // l'ouverture suivante), avec le seuil et le nombre de membres REELS
+          // relus on-chain. Ecrit uniquement apres une creation VERIFIEE.
+          await usage.markUsed(result.readBack.address, {
+            memberCount: result.readBack.memberCount,
+            threshold: result.readBack.threshold,
+          });
         }
       } catch (caught: unknown) {
         setCreateError(caught instanceof Error ? caught.message : String(caught));
@@ -665,7 +834,7 @@ export function CreateVaultScreen({
         setCreating(false);
       }
     },
-    [plan, registry, signAndSendTransactions],
+    [plan, registry, signAndSendTransactions, usage],
   );
 
   /**
@@ -793,6 +962,12 @@ export function CreateVaultScreen({
           source: 'created',
           vaultName,
         });
+        // Le vault CREÉ (verifie apres coup) devient le DERNIER UTILISE, avec
+        // son seuil et son nombre de membres REELS relus on-chain.
+        await usage.markUsed(readBack.address, {
+          memberCount: readBack.memberCount,
+          threshold: readBack.threshold,
+        });
         return;
       }
 
@@ -836,7 +1011,7 @@ export function CreateVaultScreen({
     } finally {
       setChecking(false);
     }
-  }, [checking, connection, createResult, creationExpectation, expectedMultisigPda, plan, registry, vaultName]);
+  }, [checking, connection, createResult, creationExpectation, expectedMultisigPda, plan, registry, usage, vaultName]);
 
   const onCreateOnDevnet = useCallback(() => {
     const creator = walletAddress;
@@ -913,9 +1088,9 @@ export function CreateVaultScreen({
   }, [onCancel]);
 
   const requestDiscard = useCallback(() => {
-    Alert.alert('Discard vault setup?', 'Your current setup will be lost.', [
-      { style: 'cancel', text: 'Continue editing' },
-      { onPress: () => onCancelRef.current(), style: 'destructive', text: 'Discard' },
+    Alert.alert('Cancel vault setup?', 'Your current setup will be lost.', [
+      { style: 'cancel', text: 'Keep editing' },
+      { onPress: () => onCancelRef.current(), style: 'destructive', text: 'Cancel' },
     ]);
   }, []);
 
@@ -939,6 +1114,27 @@ export function CreateVaultScreen({
 
   const requiredMembers = minMembersFor(setupType ?? 'custom');
 
+  // Le preset « Recommended: 2 of 3 » plafonne a son nombre de signers
+  // (minMembersFor('recommended') === 3, cf. SETUP_PRESETS) : une fois atteint,
+  // le formulaire d'ajout disparait DEFINITIVEMENT, sans porte de sortie.
+  // Le setup « custom » n'a AUCUNE limite : le bloc d'ajout reste toujours rendu.
+  const reachedRecommendedSigners =
+    setupType === 'recommended' && members.length >= minMembersFor('recommended');
+  const showAddSignerBlock = !reachedRecommendedSigners;
+
+  // Message d'INFORMATION (ambre, NON bloquant) du setup custom : un vault a 2
+  // signataires peut etre bloque par la perte d'un seul ; a 1 signataire, une
+  // seule cle peut tout deplacer. Rien n'est reclame, le custom continue des 2
+  // signataires ; le message disparait des que le risque n'existe plus.
+  const customSignerRiskMessage =
+    setupType !== 'custom'
+      ? null
+      : members.length === 1
+        ? 'With 1 signer, one key can move everything alone.'
+        : members.length === 2
+          ? 'With 2 signers, losing one blocks the vault.'
+          : null;
+
   const canContinue =
     step === 1
       ? // Nom OBLIGATOIRE des Vault setup : le placeholder n'est jamais une
@@ -958,6 +1154,18 @@ export function CreateVaultScreen({
     plan.readyForInstructionBuild &&
     (createResult === null || attemptOutcome?.allowNewAttempt === true) &&
     !creating;
+
+  /**
+   * Echec de PREPARATION (preflight / RPC / simulation) : un message d'erreur
+   * existe alors qu'AUCUN `createResult` n'a ete produit — l'echec survient
+   * AVANT toute tentative signee. Sans ce garde-fou, hors ligne, l'utilisateur
+   * restait devant le CTA principal sans AUCUNE explication (le seul panneau
+   * d'echec existant, ETAT B, exige un `createResult`).
+   */
+  const preparationFailed =
+    createError !== null && createResult === null && !creating && !createdAndVerified;
+  const preparationNetworkFailure =
+    preparationFailed && isTemporaryNetworkFailure(createError ?? '');
 
   /** Raison utilisateur affichee a cote du CTA (jamais un libelle mort). */
   const createBlockedReason =
@@ -1046,7 +1254,7 @@ export function CreateVaultScreen({
             onPress={requestDiscard}
             style={({ pressed }) => [styles.ghostAction, pressed && styles.pressed]}
           >
-            <Text style={styles.ghostActionText}>Discard vault setup</Text>
+            <Text style={styles.ghostActionText}>Cancel</Text>
           </Pressable>
           <DevnetPill />
         </View>
@@ -1110,7 +1318,7 @@ export function CreateVaultScreen({
               Required. Enter a name for this vault.
             </Text>
             {vaultName.trim().length === 0 && nameTouched ? (
-              <InfoBox glyph="⚠" style={styles.infoBox} tone="warning">
+              <InfoBox glyph="⚠" style={[styles.infoBox, styles.alertBox]} tone="warning">
                 <InfoText tone="warning">Enter a vault name to continue.</InfoText>
               </InfoBox>
             ) : null}
@@ -1140,61 +1348,68 @@ export function CreateVaultScreen({
             {/* Formulaire d'ajout d'un signer : chaque champ dans SON PROPRE
                 conteneur, ordre vertical STRICT (adresse -> label -> bouton).
                 Aucune position absolue, hauteur automatique, CTA sous les champs,
-                atteignable au scroll (voir styles.fieldBlock). */}
+                atteignable au scroll (voir styles.fieldBlock).
+                Le bloc n'est masque QUE par le preset recommande, une fois ses
+                3 signers ajoutes (voir showAddSignerBlock) ; le setup custom le
+                garde toujours visible. */}
+            {showAddSignerBlock ? (
+              <>
+                {/* 1) Signer address — champ partage avec « Paste » integre. Le collage
+                    remplit le champ UNIQUEMENT. Aucun membre ajoute, aucun role. */}
+                <View style={styles.fieldBlock}>
+                  <AddressInput
+                    inputRef={registerField('pendingAddress')}
+                    label="Public address"
+                    onBlur={onFieldBlur}
+                    onChangeText={setPendingAddress}
+                    onFocus={onFieldFocus('pendingAddress')}
+                    placeholder="Solana public address"
+                    testID="member-pending-address"
+                    value={pendingAddress}
+                  />
+                </View>
 
-            {/* 1) Signer address — champ partage avec « Paste » integre. Le collage
-                remplit le champ UNIQUEMENT. Aucun membre ajoute, aucun role. */}
-            <View style={styles.fieldBlock}>
-              <AddressInput
-                inputRef={registerField('pendingAddress')}
-                label="Public address"
-                onBlur={onFieldBlur}
-                onChangeText={setPendingAddress}
-                onFocus={onFieldFocus('pendingAddress')}
-                placeholder="Solana public address"
-                testID="member-pending-address"
-                value={pendingAddress}
-              />
-            </View>
+                {/* 2) Signer label — conteneur separe, label separe du champ. */}
+                <View style={styles.fieldBlock}>
+                  <Text style={styles.fieldLabel}>Signer label</Text>
+                  <TextInput
+                    autoCapitalize="words"
+                    onChangeText={setPendingLabel}
+                    onBlur={onFieldBlur}
+                    onFocus={onFieldFocus('pendingLabel')}
+                    placeholder="Ledger at home"
+                    placeholderTextColor={colors.textMuted}
+                    ref={registerField('pendingLabel')}
+                    style={styles.input}
+                    value={pendingLabel}
+                  />
+                </View>
 
-            {/* 2) Signer label — conteneur separe, label separe du champ. */}
-            <View style={styles.fieldBlock}>
-              <Text style={styles.fieldLabel}>Signer label</Text>
-              <TextInput
-                autoCapitalize="words"
-                onChangeText={setPendingLabel}
-                onBlur={onFieldBlur}
-                onFocus={onFieldFocus('pendingLabel')}
-                placeholder="Ledger at home"
-                placeholderTextColor={colors.textMuted}
-                ref={registerField('pendingLabel')}
-                style={styles.input}
-                value={pendingLabel}
-              />
-            </View>
+                {/* 3) roles/permissions : absents du formulaire d'ajout aujourd'hui. */}
 
-            {/* 3) roles/permissions : absents du formulaire d'ajout aujourd'hui. */}
-
-            {/* 4) « Add signer » SOUS les champs, dans son propre conteneur. */}
-            <View style={styles.fieldBlock}>
-              <PillButton label="Add signer" onPress={addPendingMember} variant="secondary" />
-            </View>
+                {/* 4) « Add signer » SOUS les champs, dans son propre conteneur. */}
+                <View style={styles.fieldBlock}>
+                  <PillButton label="Add signer" onPress={addPendingMember} variant="secondary" />
+                </View>
+              </>
+            ) : null}
 
             {pendingError !== null ? (
-              <InfoBox glyph="⚠" style={styles.infoBox} tone="error">
+              <InfoBox glyph="⚠" style={[styles.infoBox, styles.alertBox]} tone="error">
                 <InfoText tone="error">{pendingError}</InfoText>
               </InfoBox>
             ) : null}
 
-            <Text style={styles.sectionTitle}>
-              Signers ({members.length} added)
-            </Text>
-            {members.length < requiredMembers ? (
-              <Text style={styles.warningText}>
-                {setupType === 'recommended'
-                  ? 'Recommended setup requires 3 signers.'
-                  : `At least ${requiredMembers} signers are required.`}
-              </Text>
+            {/* Titre de liste FIXE : « Signers », sans compteur, a toutes les
+                etapes et quel que soit le nombre de signataires. */}
+            <Text style={styles.sectionTitle}>Signers</Text>
+            {/* Setup custom : message d'INFORMATION AMBRE (non bloquant) sur le
+                risque d'un vault a 2 (ou 1) signataires. Present uniquement dans
+                les cas concernes, disparait des que le risque n'existe plus. */}
+            {customSignerRiskMessage !== null ? (
+              <InfoBox glyph="⚠" style={[styles.infoBox, styles.alertBox]} tone="warning">
+                <InfoText tone="warning">{customSignerRiskMessage}</InfoText>
+              </InfoBox>
             ) : null}
             {members.map((member) => (
               <Card key={member.id} style={styles.memberCard}>
@@ -1247,7 +1462,7 @@ export function CreateVaultScreen({
             ))}
 
             {draft.validationErrors.length > 0 ? (
-              <InfoBox glyph="⚠" style={styles.infoBox} tone="error">
+              <InfoBox glyph="⚠" style={[styles.infoBox, styles.alertBox]} tone="error">
                 {draft.validationErrors.map((message) => (
                   <InfoText key={message} tone="error">{message}</InfoText>
                 ))}
@@ -1296,16 +1511,27 @@ export function CreateVaultScreen({
             <Text style={styles.fieldValue}>
               {threshold} of {members.length} approvals required.
             </Text>
-            {/* « 2 of 2 » n'est JAMAIS presente comme recommande : la
-                recommandation d'affichage n'est rendue que pour 2 of 3 (3 membres). */}
-            {thresholdRecommendation !== null && members.length !== 2 ? (
-              <InfoBox glyph="★" style={styles.infoBox} tone="success">
-                <InfoText tone="success">{thresholdRecommendation.label}</InfoText>
-                <InfoText>{thresholdRecommendation.detail}</InfoText>
+            {/* Panneau de seuil pour un vault de TROIS signataires : le TON et
+                les TEXTES suivent le seuil selectionne — 2 = vert recommande,
+                1 = danger (rouge), 3 = avertissement (ambre). Tokens du theme
+                uniquement (tons `success` / `error` / `warning` de la primitive).
+                « 2 of 2 » n'est jamais presente comme recommande. */}
+            {thresholdGuidance !== null ? (
+              <InfoBox
+                glyph={thresholdGuidance.glyph}
+                style={
+                  thresholdGuidance.tone === 'success'
+                    ? styles.infoBox
+                    : [styles.infoBox, styles.alertBoxTop]
+                }
+                tone={thresholdGuidance.tone}
+              >
+                <InfoText tone={thresholdGuidance.tone}>{thresholdGuidance.label}</InfoText>
+                <InfoText>{thresholdGuidance.detail}</InfoText>
               </InfoBox>
             ) : null}
             {lowSecurityThresholdWarning(members.length, threshold) !== null ? (
-              <InfoBox glyph="⚠" style={styles.infoBox} tone="warning">
+              <InfoBox glyph="⚠" style={[styles.infoBox, styles.alertBoxTop]} tone="warning">
                 <InfoText tone="warning">{LOW_SECURITY_THRESHOLD_LABEL}</InfoText>
                 <InfoText tone="warning">{LOW_SECURITY_THRESHOLD_DETAIL}</InfoText>
                 <InfoText tone="warning">
@@ -1318,7 +1544,7 @@ export function CreateVaultScreen({
             {/* EXACTEMENT 2-of-2 : alerte de disponibilite affichee IMMEDIATEMENT
                 (des l'etape Threshold), sans bloquer ni ecraser le choix. */}
             {twoOfTwoAvailabilityRisk ? (
-              <InfoBox glyph="⚠" style={styles.infoBox} tone="warning">
+              <InfoBox glyph="⚠" style={[styles.infoBox, styles.alertBoxTop]} tone="warning">
                 <InfoText tone="warning">Availability risk</InfoText>
                 <InfoText tone="warning">
                   If either signer loses access, the vault may become permanently unusable.
@@ -1328,10 +1554,11 @@ export function CreateVaultScreen({
                 </InfoText>
               </InfoBox>
             ) : null}
-            <Text style={styles.hint}>
-              With 2 of 3, any two signers can approve. The vault remains accessible if one signer
-              is unavailable.
-            </Text>
+            {/* Phrase recapitulative coherente avec le seuil choisi : elle suit
+                la MÊME selection que le panneau ci-dessus (3 signataires). */}
+            {thresholdGuidance !== null ? (
+              <Text style={styles.hint}>{thresholdGuidance.summary}</Text>
+            ) : null}
           </View>
         ) : null}
 
@@ -1353,12 +1580,12 @@ export function CreateVaultScreen({
             </Text>
 
             {draft.validationErrors.map((message) => (
-              <InfoBox glyph="⚠" key={message} style={styles.infoBox} tone="error">
+              <InfoBox glyph="⚠" key={message} style={[styles.infoBox, styles.alertBox]} tone="error">
                 <InfoText tone="error">{message}</InfoText>
               </InfoBox>
             ))}
             {draft.validationWarnings.map((message) => (
-              <InfoBox glyph="⚠" key={message} style={styles.infoBox} tone="warning">
+              <InfoBox glyph="⚠" key={message} style={[styles.infoBox, styles.alertBox]} tone="warning">
                 <InfoText tone="warning">{message}</InfoText>
               </InfoBox>
             ))}
@@ -1404,7 +1631,7 @@ export function CreateVaultScreen({
 
               {/* Version COMPACTE de l'alerte 2-of-2 conservee sur la Review finale. */}
               {twoOfTwoAvailabilityRisk ? (
-                <InfoBox glyph="⚠" style={styles.infoBox} tone="warning">
+                <InfoBox glyph="⚠" style={[styles.infoBox, styles.alertBoxTop]} tone="warning">
                   <InfoText tone="warning">Availability risk</InfoText>
                   <InfoText tone="warning">
                     If either signer loses access, the vault may become permanently unusable.
@@ -1431,7 +1658,7 @@ export function CreateVaultScreen({
               {/* Erreurs bloquantes et avertissements rappeles ici : la revue doit
                   rester lisible sans revenir a l'etape Security check. */}
               {draft.validationErrors.length > 0 ? (
-                <InfoBox glyph="⚠" style={styles.infoBox} tone="error">
+                <InfoBox glyph="⚠" style={[styles.infoBox, styles.alertBox]} tone="error">
                   {draft.validationErrors.map((message) => (
                     <InfoText key={message} tone="error">{message}</InfoText>
                   ))}
@@ -1439,7 +1666,7 @@ export function CreateVaultScreen({
               ) : null}
 
               {draft.validationWarnings.length > 0 ? (
-                <InfoBox glyph="⚠" style={styles.infoBox} tone="warning">
+                <InfoBox glyph="⚠" style={[styles.infoBox, styles.alertBox]} tone="warning">
                   {draft.validationWarnings.map((message) => (
                     <InfoText key={message} tone="warning">{message}</InfoText>
                   ))}
@@ -1491,13 +1718,33 @@ export function CreateVaultScreen({
                   Masque pendant la creation (ETAT 2) et apres succes. */}
               {vaultVisibleState !== 'awaiting-wallet' ? (
                 canCreate ? null : (
-                  <InfoBox glyph="⚠" style={styles.noticeBox} tone="warning">
+                  <InfoBox glyph="⚠" style={[styles.noticeBox, styles.alertBoxTop]} tone="warning">
                     <InfoText tone="warning">{createReadiness.userMessage}</InfoText>
                     <InfoText tone="warning">{createReadiness.recommendedAction}</InfoText>
                     <InfoText tone="warning">{createBlockedReason.message}</InfoText>
                     <InfoText tone="warning">{createBlockedReason.action}</InfoText>
                   </InfoBox>
                 )
+              ) : null}
+
+              {/* ECHEC DE PREPARATION (hors ligne, RPC injoignable…) : un retour
+                  HUMAIN toujours visible a cote du CTA, jamais un bouton mort
+                  sans explication. Le CTA reste ACTIONNABLE (canCreate
+                  inchange) : un simple nouveau tap relance la preparation,
+                  aucun nouveau flux de reessai n'est cree. */}
+              {preparationFailed ? (
+                <InfoBox glyph="⚠" style={[styles.noticeBox, styles.alertBoxTop]} tone="warning">
+                  <InfoText tone="warning">
+                    {preparationNetworkFailure
+                      ? 'You appear to be offline'
+                      : 'Creation could not be prepared'}
+                  </InfoText>
+                  <InfoText tone="warning">
+                    {preparationNetworkFailure
+                      ? 'Check your connection and try again. Nothing was signed and nothing was sent.'
+                      : 'See troubleshooting details below, then try again. Nothing was signed and nothing was sent.'}
+                  </InfoText>
+                </InfoBox>
               ) : null}
 
               {/* ETAT 2 — creation en cours : progression uniquement. */}
@@ -1514,7 +1761,7 @@ export function CreateVaultScreen({
                   tentative. JAMAIS rendu pendant la creation (ETAT 2), des qu'une
                   signature existe (ETAT 4) ou apres succes (ETAT 5). */}
               {!signatureObtained && vaultVisibleState !== 'awaiting-wallet' ? (
-                <>
+                <View style={styles.ctaBlock}>
                   <PillButton
                     busy={creating}
                     disabled={!canCreate || creating}
@@ -1529,21 +1776,18 @@ export function CreateVaultScreen({
                   <Text style={styles.hint}>
                     Nothing is sent on-chain before the final confirmation.
                   </Text>
-                </>
+                </View>
               ) : null}
 
-              {/* ETAT B — echec AVANT signature : rien n'a ete envoye. Les details
-                  techniques sont dans Troubleshooting details, pas ici. Le flux de
+              {/* ETAT B — echec AVANT signature : rien n'a ete signe ni envoye.
+                  Copie HUMAINE et courte en ton AVERTISSEMENT (une annulation
+                  n'est pas une panne) ; les details techniques vivent dans
+                  Troubleshooting details, jamais dans ce panneau. Le flux de
                   nouvelle tentative reste le CTA unique ci-dessus. */}
               {nothingWasSent ? (
-                <InfoBox glyph="⚠" style={styles.errorBox} tone="error">
-                  <InfoText tone="error">Nothing was sent.</InfoText>
-                  {createError !== null ? (
-                    <InfoText tone="error">{createError}</InfoText>
-                  ) : null}
-                  {operationReport !== null ? (
-                    <InfoText>{operationReport.title}</InfoText>
-                  ) : null}
+                <InfoBox glyph="⚠" style={[styles.noticeBox, styles.alertBoxTop]} tone="warning">
+                  <InfoText tone="warning">{CREATION_CANCELLED_TITLE}</InfoText>
+                  <InfoText tone="warning">{CREATION_CANCELLED_BODY}</InfoText>
                   <InfoText>
                     {needsPrepareAgain
                       ? 'Prepare again is available: no signature was obtained.'
@@ -1555,7 +1799,7 @@ export function CreateVaultScreen({
               {/* ETAT C — signature obtenue, PAS encore confirmee. Un seul libelle,
                   derive des preuves : jamais de contradiction avec le statut. */}
               {vaultVisibleState === 'signed-pending-confirmation' ? (
-                <InfoBox glyph="⏳" style={styles.noticeBox} tone="warning">
+                <InfoBox glyph="⏳" style={[styles.noticeBox, styles.alertBoxTop]} tone="warning">
                   <InfoText tone="warning">
                     {VAULT_VISIBLE_LABELS['signed-pending-confirmation']}
                   </InfoText>
@@ -1565,16 +1809,18 @@ export function CreateVaultScreen({
                   <Text style={styles.hint}>Confirmation: {signatureStatus}</Text>
                   <Text style={styles.hint}>Vault verification: pending</Text>
                   {checkReport !== null ? <Text style={styles.hint}>{checkReport}</Text> : null}
-                  <PillButton
-                    accessibilityLabel="Check transaction again"
-                    busy={checking}
-                    disabled={checking}
-                    label="Check transaction again"
-                    onPress={() => {
-                      void onCheckTransactionAgain();
-                    }}
-                    variant="secondary"
-                  />
+                  <View style={styles.recheckBlock}>
+                    <PillButton
+                      accessibilityLabel="Check transaction again"
+                      busy={checking}
+                      disabled={checking}
+                      label="Check transaction again"
+                      onPress={() => {
+                        void onCheckTransactionAgain();
+                      }}
+                      variant="secondary"
+                    />
+                  </View>
                   {signatureVerdict?.retryAllowed !== true ? (
                     <Text style={styles.hint}>
                       A signature already exists: no second send is allowed until the transaction is
@@ -1603,25 +1849,29 @@ export function CreateVaultScreen({
                   <Text style={styles.hint}>Confirmation: {signatureStatus}</Text>
                   <Text style={styles.hint}>Vault verification: pending</Text>
                   {checkReport !== null ? <Text style={styles.hint}>{checkReport}</Text> : null}
-                  <PillButton
-                    accessibilityLabel="Check transaction again"
-                    busy={checking}
-                    disabled={checking}
-                    label="Check transaction again"
-                    onPress={() => {
-                      void onCheckTransactionAgain();
-                    }}
-                    variant="secondary"
-                  />
-                  {operationReport?.actions.allowReconnect === true ? (
+                  <View style={styles.recheckBlock}>
                     <PillButton
-                      accessibilityLabel="Reconnect wallet"
-                      label="Reconnect wallet"
+                      accessibilityLabel="Check transaction again"
+                      busy={checking}
+                      disabled={checking}
+                      label="Check transaction again"
                       onPress={() => {
-                        void onReconnectWallet();
+                        void onCheckTransactionAgain();
                       }}
                       variant="secondary"
                     />
+                  </View>
+                  {operationReport?.actions.allowReconnect === true ? (
+                    <View style={styles.recheckBlock}>
+                      <PillButton
+                        accessibilityLabel="Reconnect wallet"
+                        label="Reconnect wallet"
+                        onPress={() => {
+                          void onReconnectWallet();
+                        }}
+                        variant="secondary"
+                      />
+                    </View>
                   ) : null}
                   <Text style={styles.hint}>
                     A signature already exists: no second send is allowed until the transaction is
@@ -1671,7 +1921,10 @@ export function CreateVaultScreen({
                     />
                     <Pressable
                       accessibilityRole="button"
-                      onPress={onGoToInbox}
+                      onPress={() => {
+                        const address = createResult?.readBack?.address ?? null;
+                        if (address !== null) onViewProposals({ address, vaultName });
+                      }}
                       style={({ pressed }) => [styles.successLink, pressed && styles.pressed]}
                     >
                       <Text style={styles.successLinkText}>View proposals</Text>
@@ -1711,7 +1964,7 @@ export function CreateVaultScreen({
                 (owner/threshold/membre/permissions…). Echec DETERMINISTE : aucun
                 second envoi, aucune ouverture de wallet, aucun Prepare again. */}
             {vaultVisibleState === 'confirmed-verification-mismatch' ? (
-              <InfoBox glyph="✕" style={styles.errorBox} tone="error">
+              <InfoBox glyph="✕" style={[styles.errorBox, styles.alertBoxTop]} tone="error">
                 <InfoText tone="error">Transaction confirmed</InfoText>
                 <InfoText tone="error">
                   The multisig account could not be verified against the configuration you
@@ -1734,7 +1987,7 @@ export function CreateVaultScreen({
             {/* TROUBLESHOOTING DETAILS — repliable, affiche uniquement si au
                 moins un diagnostic existe. Jamais une etape obligatoire. */}
             {hasDiagnostics ? (
-              <View style={styles.block}>
+              <View style={[styles.block, styles.troubleshootingBlock]}>
                 <PillButton
                   accessibilityLabel="Troubleshooting details"
                   label="Troubleshooting details"
@@ -1746,12 +1999,23 @@ export function CreateVaultScreen({
                     heights. */}
                 {troubleshootingOpen ? (
                   <View style={styles.detailBox}>
-                    {technicalErrors.map((message, index) => (
-                      <Text key={`detail-${index}`} selectable style={styles.detailText}>
+                    {/* Resume HUMAIN court : nature de l'echec + etape. */}
+                    <Text style={styles.detailSummary}>{troubleshootingDigest.summary}</Text>
+                    {/* Detail brut CONDENSE : dedoublonne, reseau factorise en UNE
+                        ligne, plafonne. Jamais le pave repete trois fois. */}
+                    {troubleshootingDigest.lines.map((message, index) => (
+                      <Text key={`digest-${index}`} selectable style={styles.detailText}>
                         {message}
                       </Text>
                     ))}
-                    {mwaReport !== null ? (
+                    {troubleshootingDigest.hiddenCount > 0 ? (
+                      <Text style={styles.detailText}>
+                        +{troubleshootingDigest.hiddenCount} more line
+                        {troubleshootingDigest.hiddenCount > 1 ? 's' : ''} — open raw details for the full
+                        log.
+                      </Text>
+                    ) : null}
+                    {mwaReport !== null && !nothingWasSent ? (
                       <>
                         <Text style={styles.detailText}>MWA step: {mwaReport.step}</Text>
                         <Text style={styles.detailText}>
@@ -1771,6 +2035,27 @@ export function CreateVaultScreen({
                     ) : null}
                     {checkReport !== null ? (
                       <Text style={styles.detailText}>Last recheck: {checkReport}</Text>
+                    ) : null}
+                    {/* Second niveau de repli : le detail brut INTEGRAL reste
+                        consultable a la demande, jamais impose. */}
+                    <Pressable
+                      accessibilityLabel="Show raw details"
+                      accessibilityRole="button"
+                      onPress={() => setRawDetailsOpen((open) => !open)}
+                      style={({ pressed }) => [styles.rawDetailsToggle, pressed && styles.pressed]}
+                    >
+                      <Text style={styles.receiptToggleText}>
+                        {rawDetailsOpen ? 'Hide raw details' : 'Show raw details'}
+                      </Text>
+                    </Pressable>
+                    {rawDetailsOpen ? (
+                      <View>
+                        {technicalErrors.map((message, index) => (
+                          <Text key={`raw-${index}`} selectable style={styles.detailText}>
+                            {message}
+                          </Text>
+                        ))}
+                      </View>
                     ) : null}
                   </View>
                 ) : null}
@@ -1992,6 +2277,39 @@ const styles = StyleSheet.create({
   infoBox: {
     marginTop: spacing.md,
   },
+  // Correctif LOCAL du déséquilibre vertical des encarts warning/error.
+  // La primitive V2 `InfoBox` est FIGÉE par un test (« les primitives V2
+  // restent figées ») : elle applique `alignItems: 'flex-start'` et son glyphe
+  // (⚠ : fontSize ~15 SANS `lineHeight`) a une boîte de ligne plus haute que
+  // le texte (qui, lui, porte un `lineHeight` de 19). Le glyphe gonfle donc la
+  // rangée et le texte, calé en haut, laissait plus d'espace SOUS lui qu'AU-
+  // dessus (bas du panneau non aligné sur le bas du texte). On corrige l'INSTANCE
+  // via le prop `style`, exactement comme les correctifs déjà validés
+  // (NewProposalScreen.warningBox, ConnectScreen.dialogWarning) :
+  //  - `alignItems: 'center'` : centre verticalement les enfants, le résidu de
+  //    hauteur (glyphe − ligne de texte) se répartit à parts égales en haut et
+  //    en bas ;
+  //  - `padding: spacing.lg` : air interne symétrique (haut = bas).
+  // Appliqué EN TABLEAU avec le style existant (styles.infoBox / noticeBox /
+  // errorBox) : ces styles sont PARTAGÉS à l'échelle du fichier (y compris des
+  // encarts `info`/`success`), on ne les modifie donc pas — on empile ce style
+  // par-dessus uniquement sur les 14 encarts warning/error.
+  alertBox: {
+    alignItems: 'center',
+    padding: spacing.lg,
+  },
+  // Variante HAUT du même correctif : encarts dont le CORPS comporte un TITRE
+  // (1re ligne) PUIS du contenu supplémentaire (phrase(s), bouton, divulgation).
+  // Centrer verticalement contre tout le bloc décrochait le glyphe ⚠ de son
+  // titre ; en `flex-start` la rangée s'aligne en HAUT et le glyphe reste sur la
+  // PREMIÈRE ligne. Corps multi-lignes → hauteur de rangée donnée par le corps :
+  // aucun déséquilibre vertical réintroduit. Les encarts à contenu COURT (une
+  // seule InfoText : nom obligatoire, pendingError, listes de messages brutes)
+  // gardent `alertBox`.
+  alertBoxTop: {
+    alignItems: 'flex-start',
+    padding: spacing.lg,
+  },
   infoHeading: {
     color: colors.warning,
     fontSize: typography.body,
@@ -2079,6 +2397,27 @@ const styles = StyleSheet.create({
   summaryBox: {
     marginTop: spacing.md,
   },
+  // Espace vertical entre un panneau/bloc et le CTA principal qui le suit.
+  // Meme token que les autres ecarts « bloc -> bouton » de l'ecran
+  // (successActions, noticeBox, errorBox, busyRow : spacing.lg), pour rester
+  // coherent sur toute la page. Aucune valeur codee en dur.
+  ctaBlock: {
+    marginTop: spacing.lg,
+  },
+  // Meme espace vertical devant le bouton « Troubleshooting details », quand un
+  // diagnostic (ex. panneau « Nothing was sent. ») le precede immediatement.
+  troubleshootingBlock: {
+    marginTop: spacing.lg,
+  },
+  // Meme espace vertical devant les boutons de relecture INSERES dans les encarts
+  // de statut (ETATS C/D) : « Check transaction again » colle au hint au-dessus,
+  // et « Reconnect wallet » colle au bouton precedent. Meme token que les autres
+  // ecarts « bloc -> bouton » de l'ecran (successActions, noticeBox, errorBox,
+  // busyRow, ctaBlock, troubleshootingBlock : spacing.lg). Aucune valeur codee en dur.
+  recheckBlock: {
+    alignSelf: 'stretch',
+    marginTop: spacing.lg,
+  },
   costValue: {
     color: colors.text,
     fontSize: typography.sectionTitle,
@@ -2140,6 +2479,20 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     fontSize: typography.caption,
     marginTop: spacing.xs,
+  },
+  // Resume humain court en tete du bloc technique : plus visible que le brut.
+  detailSummary: {
+    color: colors.text,
+    fontSize: typography.secondary,
+    fontWeight: '700',
+    marginBottom: spacing.xs,
+  },
+  // Second repli « Show raw details » : meme gabarit que le recu technique.
+  rawDetailsToggle: {
+    alignSelf: 'flex-start',
+    borderRadius: radii.pill,
+    marginTop: spacing.sm,
+    paddingVertical: spacing.xs,
   },
   navRow: {
     alignSelf: 'stretch',

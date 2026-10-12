@@ -67,11 +67,19 @@ function tabFeedback(): void {
 
 export function TabBar({
   active,
+  badgeCount = 0,
   onSelect,
 }: {
   active: TabKey;
+  /**
+   * Nombre de propositions en attente d'approbation de CE wallet dans le vault
+   * ACTIF. Fourni par l'appelant depuis la source verifiee DEJA lue (aucune
+   * lecture ici). 0 ou absent => aucun badge. Ce n'est PAS un badge multi-vault.
+   */
+  badgeCount?: number;
   onSelect: (tab: TabKey) => void;
 }) {
+  const safeBadge = Number.isFinite(badgeCount) && badgeCount > 0 ? Math.floor(badgeCount) : 0;
   return (
     <View accessibilityRole="tablist" style={styles.bar}>
       {TAB_ORDER.map((tab) => {
@@ -110,6 +118,13 @@ export function TabBar({
                   size={22}
                 />
               )}
+              {/* Badge Proposals : scopé au vault ACTIF uniquement. Compte les
+                  propositions attendant CE wallet, issu d'une source deja lue. */}
+              {tab === 'proposals' && safeBadge > 0 ? (
+                <View pointerEvents="none" style={styles.badge}>
+                  <Text style={styles.badgeText}>{safeBadge > 99 ? '99+' : String(safeBadge)}</Text>
+                </View>
+              ) : null}
             </View>
             <Text
               numberOfLines={1}
@@ -196,5 +211,24 @@ const styles = StyleSheet.create({
   },
   tabLabelActive: {
     color: colors.mint,
+  },
+  // Badge Proposals : petit compteur a cheval sur le coin haut-droit de l'icone.
+  // Couleur de fond = aplat clair de la barre (lisible sur les deux etats).
+  badge: {
+    alignItems: 'center',
+    backgroundColor: colors.mint,
+    borderRadius: radii.pill,
+    justifyContent: 'center',
+    minWidth: 16,
+    paddingHorizontal: 4,
+    position: 'absolute',
+    right: -10,
+    top: -6,
+  },
+  badgeText: {
+    color: colors.onLight,
+    fontSize: typography.micro,
+    fontWeight: '800',
+    lineHeight: 14,
   },
 });

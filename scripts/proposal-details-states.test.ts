@@ -9,6 +9,12 @@ import {
   executionNotAvailableDetail,
 } from '../src/squads/proposalActionState';
 import {
+  approvalCountLabel,
+  effectiveProposalDisplay,
+  isExecutedProposal,
+  showsPreExecutionCopy,
+} from '../src/ui/proposalDisplayState';
+import {
   LOW_SECURITY_THRESHOLD_DETAIL,
   LOW_SECURITY_THRESHOLD_LABEL,
   THREE_MEMBER_RECOMMENDATION,
@@ -181,9 +187,12 @@ check('14. Proposal executee : aucun Execute', () => {
   assert.notEqual(deriveProposalExecuteState({ executed: true, thresholdReached: true, walletHasExecute: true }), 'available');
 });
 
-check('15. Proposal executee : ✓ Transaction executed visible', () => {
+check('15. Proposal executee : titre terminal unique, sans doublon', () => {
+  // Le libelle reste DEFINI (module partage, non modifie) mais il n'est plus rendu :
+  // la carte terminale affiche un seul titre, « Transaction executed ».
   assert.equal(PROPOSAL_ACTION_LABELS.executed, '✓ Transaction executed');
-  assert.ok(DETAILS.includes('PROPOSAL_ACTION_LABELS.executed'));
+  assert.ok(!DETAILS.includes('PROPOSAL_ACTION_LABELS.executed'), 'doublon retire de la carte');
+  assert.equal(DETAILS.split('Transaction executed').length - 1, 1, 'un seul titre');
 });
 
 check('16. deux ou trois membres : threshold par defaut = 2', () => {
@@ -269,6 +278,74 @@ check('22. les etats principaux sont mutuellement exclusifs', () => {
 });
 
 setTimeout(() => {
-  console.log(`\n${passed} test(s) OK`);
+  // --- §1 : INTEGRITE D'ETAT (props d'ouverture vs lecture on-chain verifiee) ---
+
+const DISPLAY_SRC = readFileSync('src/screens/ProposalDetailsScreen.tsx', 'utf8');
+const DISPLAY_REVIEW = readFileSync('src/screens/TransactionReviewScreen.tsx', 'utf8');
+
+check('A1. la lecture VERIFIEE prime sur les props d ouverture (runtime)', () => {
+  const props = { approvedAddresses: ['A'], status: 'Active' };
+  const fresh = { approvedAddresses: ['A', 'B'], status: 'Executed' };
+  assert.deepEqual(effectiveProposalDisplay(fresh, props), fresh);
+  assert.deepEqual(effectiveProposalDisplay(null, props), props, 'sans lecture : props');
+  assert.deepEqual(effectiveProposalDisplay(undefined, props), props, 'sans lecture : props');
+});
+
+check('A2. etat terminal + copie d avant-execution (runtime)', () => {
+  const fresh = { approvedAddresses: ['A', 'B'], status: 'Executed' };
+  const stale = { approvedAddresses: ['A'], status: 'Active' };
+  assert.equal(isExecutedProposal(fresh, false), true, 'statut Executed = terminal');
+  assert.equal(isExecutedProposal(stale, true), true, 'execution verifiee = terminal');
+  assert.equal(isExecutedProposal(stale, false), false);
+  // Copie d'avant-execution JAMAIS rendue pour une proposition executee.
+  assert.equal(showsPreExecutionCopy(true), false);
+  assert.equal(showsPreExecutionCopy(false), true);
+  // Compteur : MEME source que le statut.
+  assert.equal(approvalCountLabel(2, 2), '2 of 2 approvals collected');
+});
+
+check('A3. REGRESSION : props 1 of 2 / Active vs chaine Executed / 2 of 2', () => {
+  // Scenario exact : instantane d'ouverture 1 sur 2 « Active », lecture fraiche
+  // « Executed » 2 sur 2. Toutes les surfaces visibles affichent la DONNEE RELUE.
+  const props = { approvedAddresses: ['A'], status: 'Active' };
+  const fresh = { approvedAddresses: ['A', 'B'], status: 'Executed' };
+  const display = effectiveProposalDisplay(fresh, props);
+  assert.equal(display.approvedAddresses.length, 2, 'compteur issu de la relecture');
+  assert.equal(display.status, 'Executed', 'statut issu de la relecture');
+  // Contexte de revue + modele decode construits sur la MEME source.
+  assert.ok(
+    DISPLAY_SRC.includes('const displayProposal = effectiveProposalDisplay(onchainApproval, proposal);'),
+    'source unique declaree',
+  );
+  assert.ok(
+    DISPLAY_SRC.includes('setSelfGuardContext(deriveGuardContext(result.model, displayProposal));'),
+    'contexte de revue : donnee relue',
+  );
+  assert.ok(DISPLAY_SRC.includes('proposalStatus: displayProposal.status,'), 'decode : donnee relue');
+  assert.ok(
+    !DISPLAY_SRC.includes('approvedAddresses: proposal.approvedAddresses,'),
+    'plus aucune surface alimentee par les props',
+  );
+  // Etat terminal unique + revue alimentee par cet etat.
+  assert.ok(
+    DISPLAY_SRC.includes("const executed =\n    effectiveProposalStatus === 'Executed' || executionResult?.verified === true;"),
+    'etat terminal : source unique',
+  );
+  assert.ok(DISPLAY_SRC.includes('executed={executed}'), 'revue : etat terminal transmis');
+  // La revue ne rend AUCUNE copie d'avant-execution quand l'execution est terminee.
+  assert.ok(DISPLAY_REVIEW.includes('executed?: boolean;'), 'prop terminale');
+  assert.ok(DISPLAY_REVIEW.includes('showsPreExecutionCopy(executed)'), 'copie gardee');
+  const gate = DISPLAY_REVIEW.indexOf('showsPreExecutionCopy(executed) ? (');
+  const preCopy = DISPLAY_REVIEW.indexOf(
+    'The transfer occurs only after the approval threshold is reached',
+  );
+  assert.ok(gate > 0 && preCopy > gate, 'copie d avant-execution DERRIERE la garde');
+  assert.ok(
+    DISPLAY_REVIEW.includes('The approval threshold was reached and this transfer has been executed'),
+    'copie terminale pour une proposition executee',
+  );
+});
+
+console.log(`\n${passed} test(s) OK`);
   if (process.exitCode === 1) process.exit(1);
 }, 50);

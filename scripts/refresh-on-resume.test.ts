@@ -63,7 +63,7 @@ check('4. Execute ne s active QUE sur donnee relue (jamais sur une signature)', 
   );
   assert.ok(DETAILS.includes('const thresholdReached = effectiveApprovedAddresses.length >= threshold;'));
   assert.ok(
-    DETAILS.includes('const effectiveApprovedAddresses = onchainApproval?.approvedAddresses ?? proposal.approvedAddresses;'),
+    DETAILS.includes('const effectiveApprovedAddresses = displayProposal.approvedAddresses;'),
   );
   // Aucun « canExecute » derive d'un resultat de signature.
   assert.ok(!/const canExecute[\s\S]{0,120}approvalResult/.test(DETAILS), 'pas de canExecute sur signature');
@@ -103,12 +103,26 @@ check('7. la liste des propositions possede enfin un jeton de relecture', () => 
 
 check('8. relecture de la liste : retour au premier plan ET retour du detail', () => {
   assert.ok(CONNECT.includes("if (state === 'active') refreshProposalsReadOnly();"));
-  assert.ok(
-    CONNECT.includes('setOpenDecisionIndex(null);\n            refreshProposalsReadOnly();'),
-    'retour depuis le detail',
+  // Retour depuis le detail : ferme le detail PUIS relance la relecture read-only.
+  // Le calcul du FILTRE DE RETOUR s'intercale desormais entre les deux : on borne
+  // donc la recherche au HANDLER, sans exiger une adjacence qui n'a plus de sens
+  // (l'intention — les deux actions presentes et ordonnees — est preservee).
+  const back = CONNECT.slice(
+    CONNECT.indexOf('onBack={(verifiedStatus) => {'),
+    CONNECT.indexOf('proposal={{ approvedAddresses: decision.approvedAddresses'),
   );
-  assert.ok(MDS.includes('if (next === \'active\') void reloadFromChain();'));
-  assert.ok(MDS.includes('setOpenProposal(null);\n          void reloadFromChain();'));
+  assert.ok(back.includes('setOpenDecisionIndex(null);'), 'retour depuis le detail : ferme le detail');
+  assert.ok(
+    back.includes('refreshProposalsReadOnly();'),
+    'retour depuis le detail : relance la lecture',
+  );
+  assert.ok(MDS.includes("if (next === 'active') void reloadFromChain();"));
+  const mdsBack = MDS.slice(
+    MDS.indexOf('onBack={(verifiedStatus) => {'),
+    MDS.indexOf('vaultTransactionAddress={openProposal.vaultTransactionAddress}'),
+  );
+  assert.ok(mdsBack.includes('setOpenProposal(null);'), 'ferme le detail');
+  assert.ok(mdsBack.includes('void reloadFromChain();'), 'relance la lecture');
 });
 
 check('9. aucun refresh concurrent dans les deux ecrans de liste', () => {

@@ -127,14 +127,14 @@ check('10. aucun second envoi après proposition confirmée', () => {
 
 // ---- E/F : bloc Simulation ---------------------------------------------
 check('11. bloc principal : montant en SOL', () => {
-  assert.ok(SIM_MAIN.includes('Proposal amount:'));
-  assert.ok(SIM_MAIN.includes('formatSolAmount(build.request?.lamports ?? 0)'));
+  assert.ok(SIM_MAIN.includes('Amount:'));
+  assert.ok(SIM_MAIN.includes('formatSolAmount(reviewedSnapshot.amountLamports)'));
 });
 
 check('12. bloc principal : coût en SOL', () => {
   assert.ok(SIM_MAIN.includes('Estimated creation cost:'));
-  assert.ok(SIM_MAIN.includes('formatSolAmount(Math.abs(simulation.estimatedCreatorBalanceDelta))'));
-  assert.ok(SIM_MAIN.includes('The transfer will occur only after the proposal is approved and executed.'));
+  assert.ok(SIM_MAIN.includes('formatRoundedSolAmount(Math.abs(reviewedSnapshot.estimatedCreatorBalanceDelta))'));
+  assert.ok(SIM_MAIN.includes('Creating this proposal does not move the funds.'));
 });
 
 check('13/14/15. bloc principal : aucun index, PDA ni compute unit', () => {
@@ -144,20 +144,36 @@ check('13/14/15. bloc principal : aucun index, PDA ni compute unit', () => {
   assert.ok(!SIM_MAIN.includes('Compute units'), 'aucun compute unit dans le bloc principal');
 });
 
-check('16. Advanced diagnostics fermé par défaut', () => {
-  assert.ok(PROPOSAL.includes('const [advancedOpen, setAdvancedOpen] = useState(false);'));
-  assert.ok(PROPOSAL.includes("advancedOpen ? 'Hide advanced diagnostics' : 'Advanced diagnostics'"));
+check('16. Advanced diagnostics fermé par défaut, libellé unique', () => {
+  assert.ok(PROPOSAL.includes('const [advancedOpen, setAdvancedOpen] = useState(false);'), 'fermé par défaut');
+  // Libellé CONSTANT porté par le composant UNIQUE de divulgation.
+  assert.ok(PROPOSAL.includes('label="Advanced diagnostics"'), 'libellé constant');
+  assert.ok(PROPOSAL.includes('function DisclosureRow('), 'composant de divulgation unique');
+  assert.ok(PROPOSAL.includes("{expanded ? '▾' : '◂'}"), 'indicateur interne ◂/▾');
 });
 
-check('17. Advanced diagnostics contient les informations techniques + explications', () => {
-  assert.ok(PROPOSAL.includes('Transaction index'));
-  assert.ok(PROPOSAL.includes('Internal sequence number used by the multisig.'));
-  assert.ok(PROPOSAL.includes('Transaction PDA'));
-  assert.ok(PROPOSAL.includes('Proposal PDA'));
-  assert.ok(PROPOSAL.includes('Program-derived account addresses used internally by Squads.'));
-  assert.ok(PROPOSAL.includes('Compute units'));
-  assert.ok(PROPOSAL.includes('Compute units measure the processing resources used by the simulated'));
+check('17. Advanced diagnostics = diagnostics SEULS (champs structurés)', () => {
+  assert.ok(PROPOSAL.includes('Detailed cost estimate'));
+  assert.ok(PROPOSAL.includes('Transaction account'));
+  assert.ok(PROPOSAL.includes('Proposal account'));
+  assert.ok(PROPOSAL.includes('Network'));
+  assert.ok(PROPOSAL.includes('Simulation status'));
+  // Plus AUCUNE note d implementation, explication pedagogique ni compute unit.
+  for (const gone of [
+    'Internal sequence number used by the multisig.',
+    'Program-derived account addresses used internally by Squads.',
+    'Transaction PDA',
+    'Proposal PDA',
+    'Compute units',
+  ]) {
+    assert.ok(!PROPOSAL.includes(gone), `retire : ${gone}`);
+  }
+  // L index n apparait PLUS du tout : le reçu technique ne l expose plus.
+  assert.equal(PROPOSAL.split('Proposal number').length - 1, 0, 'libellé absent (index retiré)');
+  assert.ok(!PROPOSAL.includes('Multisig transaction index'), 'plus d index technique');
+  // Les logs ne sont plus rendus que sur ECHEC (jamais sur simulation nominale).
   assert.ok(PROPOSAL.includes('simulation.logs'));
+  assert.ok(PROPOSAL.includes("pipeline.status !== 'ready' && simulation.logs.length > 0"));
   // Aucun CTA dans la section : elle ne contient que du texte.
   const diagnostics = PROPOSAL.slice(PROPOSAL.indexOf('{advancedOpen ? ('));
   assert.ok(!/onPress=\{\s*\(\)\s*=>\s*runCreate/.test(diagnostics), 'aucun CTA de creation');
@@ -165,10 +181,14 @@ check('17. Advanced diagnostics contient les informations techniques + explicati
 
 // ---- G : champ Amount ---------------------------------------------------
 check('18. aucun lamport visible dans New Proposal', () => {
-  assert.ok(!PROPOSAL.includes('Amount (lamports)'));
-  assert.ok(!PROPOSAL.includes('} lamports'));
-  assert.ok(!PROPOSAL.includes('lamports):'));
-  assert.ok(!PROPOSAL.includes('lamports`'));
+  // Hors section repliable : le cout EXACT en lamports vit desormais dans
+  // « Advanced diagnostics » (replie), donc l interdit porte sur le parcours
+  // principal, PAS sur la section technique.
+  const MAIN = PROPOSAL.slice(0, PROPOSAL.indexOf('accessibilityLabel="Toggle advanced diagnostics"'));
+  assert.ok(!MAIN.includes('Amount (lamports)'));
+  assert.ok(!MAIN.includes('} lamports'));
+  assert.ok(!MAIN.includes('lamports):'));
+  assert.ok(!MAIN.includes('lamports`'));
   assert.ok(PROPOSAL.includes('Estimated creation cost:'), 'montant monétaire en SOL');
 });
 
@@ -177,8 +197,8 @@ check('19. Amount reste vide initialement', () => {
   assert.ok(!PROPOSAL.includes("useState('0"));
 });
 
-check('20. placeholder du montant = "e.g. 0.02" (jamais une valeur)', () => {
-  assert.ok(PROPOSAL.includes('placeholder="e.g. 0.02"'));
+check('20. placeholder du montant = "e.g. 300" (jamais une valeur)', () => {
+  assert.ok(PROPOSAL.includes('placeholder="e.g. 300"'));
   assert.ok(!PROPOSAL.includes('placeholder="0.02"'), 'ce n est pas une valeur preremplie');
   assert.ok(PROPOSAL.includes("const [solText, setSolText] = useState('');"));
 });

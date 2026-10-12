@@ -5,7 +5,7 @@ import {
   listEntries,
   makeEntry,
   removeEntry,
-  upsertEntry,
+  upsertEntryPreserving,
   type MultisigRegistry,
   type MultisigRegistryEntry,
   type MultisigSource,
@@ -43,6 +43,22 @@ export interface MultisigRegistryApi {
   refresh: () => void;
   remove: (address: string) => Promise<{ errors: string[] }>;
   status: RegistryStatus;
+}
+
+/**
+ * Base AUTORITAIRE d'une ecriture : le dernier registre PERSISTE, jamais un
+ * instantane en memoire qui pourrait avoir ete depasse par une autre instance
+ * du hook (ecran de creation vs ecran d'accueil). Repli sur l'instantane
+ * courant uniquement si la relecture du stockage elle-meme echoue — pour ne
+ * jamais repartir d'un registre vide et effacer les donnees existantes.
+ */
+async function latestPersistedRegistry(
+  storage: RegistryStorage,
+  fallback: MultisigRegistry,
+): Promise<MultisigRegistry> {
+  const result = await loadRegistry(storage);
+  if (result.errors.some((entry) => entry.startsWith('StorageReadFailed'))) return fallback;
+  return result.registry;
 }
 
 export function useMultisigRegistry(
@@ -94,7 +110,12 @@ export function useMultisigRegistry(
         setError(errors[0] ?? 'InvalidEntry');
         return { entry: null, errors };
       }
-      const next = upsertEntry(registryRef.current, entry);
+      // Base = dernier registre PERSISTE (jamais un instantane perime) : une
+      // ecriture d'un ecran ne doit jamais ecraser les entrees ecrites par un
+      // autre. L'upsert protege conserve en plus une entree riche existante
+      // face a un placeholder `manual` vide.
+      const base = await latestPersistedRegistry(storage, registryRef.current);
+      const next = upsertEntryPreserving(base, entry);
       try {
         await saveRegistry(storage, next);
       } catch (caught: unknown) {
@@ -115,7 +136,10 @@ export function useMultisigRegistry(
 
   const remove = useCallback<MultisigRegistryApi['remove']>(
     async (address) => {
-      const next = removeEntry(registryRef.current, address);
+      // Base = dernier registre PERSISTE : retirer une entree ne doit jamais
+      // emporter les entrees ajoutees par une autre instance du hook.
+      const base = await latestPersistedRegistry(storage, registryRef.current);
+      const next = removeEntry(base, address);
       try {
         await saveRegistry(storage, next);
       } catch (caught: unknown) {

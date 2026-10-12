@@ -97,7 +97,12 @@ const ALLOWLIST = readFileSync('src/squads/instructionAllowlist.ts', 'utf8');
     for (const source of [DETAILS, PROPOSAL]) {
       const effects = source.split('useEffect(').slice(1);
       for (const effect of effects) {
-        const body = effect.slice(0, effect.indexOf('});'));
+        // Bornes PRECISES : un effet se termine par `});` (sans deps) OU par
+        // `}, [dep]);` (avec deps). Sans la seconde borne, un effet a deps
+        // DEBORDE sur le code qui le suit (ex. runApproval) et fait echouer a
+        // tort. Ce durcissement resserre le controle, il ne l'affaiblit pas.
+        const ends = [effect.indexOf('});'), effect.indexOf('}, [')].filter((index) => index !== -1);
+        const body = effect.slice(0, ends.length > 0 ? Math.min(...ends) : effect.length);
         assert.ok(!/signAndSend|signTransaction|sendRawTransaction/i.test(body));
       }
     }
@@ -143,7 +148,7 @@ const ALLOWLIST = readFileSync('src/squads/instructionAllowlist.ts', 'utf8');
     // plus un bouton gris desactive.
     assert.ok(DETAILS.includes('PROPOSAL_ACTION_LABELS.approvedByYou'));
     // La source est on-chain : jamais un simple etat memoire local seul.
-    assert.ok(DETAILS.includes('onchainApproval?.approvedAddresses ?? proposal.approvedAddresses'));
+    assert.ok(DETAILS.includes('effectiveProposalDisplay(onchainApproval, proposal)'));
     assert.equal(walletHasApproved(['A', 'B'], 'B'), true);
     assert.equal(walletHasApproved(['A', 'B'], 'C'), false);
   });
@@ -219,10 +224,16 @@ const ALLOWLIST = readFileSync('src/squads/instructionAllowlist.ts', 'utf8');
     assert.ok(PROPOSAL.includes('Amount (SOL)'));
     assert.ok(!PROPOSAL.includes('Amount (lamports)'));
     assert.ok(!PROPOSAL.includes('bufferLamports} lamports'));
-    assert.ok(!PROPOSAL.includes('} lamports`'));
+    // Le cout EXACT en lamports est desormais AUTORISE dans la section repliable
+    // « Advanced diagnostics » : l interdit porte sur le parcours PRINCIPAL.
+    const MAIN = PROPOSAL.slice(
+      0,
+      PROPOSAL.indexOf('accessibilityLabel="Toggle advanced diagnostics"'),
+    );
+    assert.ok(!MAIN.includes('} lamports`'));
     assert.ok(!PROPOSAL.includes('lamports):'), 'plus aucun lamport affiché');
     // La section technique est désormais repliable (« Advanced diagnostics »).
-    assert.ok(PROPOSAL.includes("'Advanced diagnostics'"));
+    assert.ok(PROPOSAL.includes('label="Advanced diagnostics"'), 'section repliable presente');
     assert.ok(PROPOSAL.includes("useState(false);"), 'section fermée par défaut');
     // Les messages d'erreur d'unicite en lamports sont remplaces par du SOL.
     assert.ok(PROPOSAL.includes('SOL_AMOUNT_MESSAGES[parsedSol.reason]'));

@@ -203,7 +203,10 @@ check('21. Un seul CTA reel Create proposal', () => {
 });
 
 check('22. Logs dans un second repli ferme par defaut', () => {
-  assert.ok(NEW.includes('Simulation logs'));
+  // Le second repli (logs bruts) est desormais etiquete « Troubleshooting details » :
+  // les logs ne font plus partie du parcours normal.
+  assert.ok(NEW.includes('Troubleshooting details'));
+  assert.ok(NEW.includes('simulationLogsOpen'), 'repli des logs');
   assert.ok(/useState\(false\)/.test(NEW), 'repli ferme par defaut');
 });
 

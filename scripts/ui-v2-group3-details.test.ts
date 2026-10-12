@@ -63,7 +63,14 @@ check('1. Proposal Details utilise UI V2 (theme + primitives)', () => {
 check('2. montant réel uniquement (aucun montant codé en dur)', () => {
   // Le montant provient TOUJOURS du modèle décodé, jamais d'une constante.
   assert.ok(DETAILS.includes('Number(model.amount.value.lamports)'), 'montant non dérivé du modèle');
-  assert.ok(DETAILS.includes('formatSol(amountLamports)'), 'formatage du montant réel attendu');
+  // La ligne technique « Exact amount » a été retirée : le montant réel reste
+  // formaté une seule fois, via le libellé « Amount » et `lamportsToSolDisplay`.
+  assert.ok(!DETAILS.includes('Exact amount'), 'ligne « Exact amount » retirée');
+  assert.ok(!DETAILS.includes('formatSol(amountLamports)'), 'formatage exact (doublon) retiré');
+  assert.ok(
+    DETAILS.includes('lamportsToSolDisplay(amountLamports)'),
+    'formatage du montant réel attendu (via Amount)',
+  );
   assert.ok(
     DETAILS.includes("amountLamports === null ? 'Amount unavailable'"),
     'absence de montant non gérée',
@@ -77,7 +84,7 @@ check('3. progression on-chain uniquement (aucun compteur local)', () => {
     'progression non dérivée des approbations',
   );
   assert.ok(
-    DETAILS.includes('onchainApproval?.approvedAddresses ?? proposal.approvedAddresses'),
+    DETAILS.includes('effectiveProposalDisplay(onchainApproval, proposal)'),
     'relecture on-chain manquante',
   );
   assert.equal(approvalProgress({ approvedCount: 1, threshold: 2 }).collectedLabel, '1 of 2 approvals collected');
@@ -129,7 +136,7 @@ check('6. Execute conserve ses guards', () => {
     assert.ok(EXECUTE_HANDLER.includes(guard), `garde Execute manquante : ${guard}`);
   }
   assert.ok(DETAILS.includes('executionAttemptedRef'), 'anti-double-tap Execute manquant');
-  assert.ok(DETAILS.includes('await signAndSendProposalExecution({'), 'module d’exécution non utilisé');
+  assert.ok(DETAILS.includes('signAndSendProposalExecution({'), 'module d’exécution non utilisé');
   assert.ok(DETAILS.includes("member.roles.includes('Execute')"), 'permission Execute non vérifiée');
 });
 

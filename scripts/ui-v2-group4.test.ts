@@ -236,7 +236,7 @@ check('12. succes terminal inchange', () => {
   assert.ok(SUCCESS.includes('mainVaultAddress'), 'vault principal derive apres verification');
   assert.ok(SUCCESS.includes('Open vault'));
   assert.ok(SUCCESS.includes('View proposals'));
-  assert.ok(SUCCESS.includes('onGoToInbox'));
+  assert.ok(SUCCESS.includes('onViewProposals'));
   assert.ok(!SUCCESS.includes('onPress={onCreateOnDevnet}'), 'aucune action Create residuelle');
 });
 

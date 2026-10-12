@@ -92,7 +92,7 @@ check('7/8/10. aucun chargement, aucune proposition, aucun ajout automatique', (
 
 check('9. destination : invalidation de build, simulation et Max', () => {
   assert.ok(/\[address, creator, destination, lamports, memo, transactionIndex\]/.test(PROPOSAL));
-  assert.ok(PROPOSAL.includes('}, [build, bufferText]);'), 'pipeline invalide');
+  assert.ok(PROPOSAL.includes('}, [build, bufferText, memo, destination]);'), 'pipeline invalide');
   assert.ok(PROPOSAL.includes('isMaxSnapshotCurrent(maxSnapshot, {'), 'snapshot Max compare');
   assert.ok(PROPOSAL.includes('destination,'), 'la destination entre dans la comparaison');
   assert.ok(
