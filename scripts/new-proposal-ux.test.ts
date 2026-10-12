@@ -1,0 +1,203 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+
+import {
+  buildProposalCreation,
+} from '../src/squads/buildProposalCreation';
+import {
+  hasInvalidDestinationError,
+  INVALID_DESTINATION_MESSAGE,
+  proposalCreationErrorMessage,
+} from '../src/ui/proposalCreationMessages';
+import { computeMaxTransfer } from '../src/vault/maxTransfer';
+import { parseSolToLamports } from '../src/vault/solAmount';
+
+/**
+ * Hotfix UI New Proposal : placeholders, CTA, message redondant, section repliable.
+ * Aucun wallet, aucun réseau. npx tsx scripts/new-proposal-ux.test.ts
+ */
+
+let passed = 0;
+
+function check(name: string, run: () => void): void {
+  try {
+    run();
+    passed += 1;
+    console.log(`PASS ${name}`);
+  } catch (caught: unknown) {
+    console.log(`FAIL ${name}`);
+    const detail = caught instanceof Error ? caught.stack ?? caught.message : String(caught);
+    console.log(detail.split('\n').slice(0, 4).join('\n'));
+    process.exitCode = 1;
+  }
+}
+
+const PROPOSAL = readFileSync('src/screens/NewProposalScreen.tsx', 'utf8');
+
+const CREATOR = 'GZUrVZnw4QoHf3SvXrYvWfFzVbXXHxoA9UKSajWBfUuM';
+const DEST = '9hvAFWYxp2mbZeF7JmvnWZqrhxNrT8tCA2PMvcshHeuR';
+const MULTISIG = 'DxaHm47inZWeBQmd63hSmEw43kvP9xebNo1H6wVznFXi';
+
+function buildWith(lamports: number) {
+  return buildProposalCreation({
+    creator: CREATOR,
+    destination: DEST,
+    lamports,
+    memo: null,
+    multisigPda: MULTISIG,
+    transactionIndex: 0,
+  });
+}
+
+check('1. Amount : state initial vide', () => {
+  assert.ok(PROPOSAL.includes("const [solText, setSolText] = useState('');"));
+  assert.ok(!PROPOSAL.includes("useState('0"));
+});
+
+check('2. "e.g. 300" est uniquement un placeholder', () => {
+  assert.ok(PROPOSAL.includes('placeholder="e.g. 300"'));
+  // Jamais affecté à un state ni utilisé comme valeur.
+  assert.ok(!PROPOSAL.includes("setSolText('e.g."));
+  assert.ok(!PROPOSAL.includes('= \'e.g. 300\''));
+  assert.ok(PROPOSAL.includes('value={solText}'));
+});
+
+check('3. le placeholder ne débloque pas le CTA', () => {
+  // Saisie vide => NaN => le builder refuse => canRunPipeline faux.
+  assert.equal(buildWith(Number.NaN).readyForBuild, false);
+  assert.ok(PROPOSAL.includes('disabled={!canRunPipeline}'));
+  assert.ok(PROPOSAL.includes('build.errors.length === 0 && pipeline.status !=='));
+});
+
+check('4. le placeholder ne produit aucun lamport', () => {
+  const parsed = parseSolToLamports('e.g. 300');
+  assert.equal(parsed.ok, false);
+  const empty = parseSolToLamports('');
+  assert.ok(!empty.ok && empty.reason === 'empty');
+  // Aucune conversion n'est branchée sur la chaîne du placeholder.
+  assert.ok(!PROPOSAL.includes('parseSolToLamports(\'e.g.'));
+});
+
+check('5. un montant réellement saisi fonctionne comme avant', () => {
+  const parsed = parseSolToLamports('0.02');
+  assert.ok(parsed.ok && parsed.lamports === 20_000_000);
+  assert.equal(buildWith(20_000_000).readyForBuild, true);
+});
+
+check('6. le placeholder du buffer ne modifie pas Max', () => {
+  assert.ok(PROPOSAL.includes('placeholder="e.g. 0.001"'));
+  assert.ok(!PROPOSAL.includes('placeholder="0"'));
+  // Max reste piloté par la valeur RÉELLE du buffer, pas par le placeholder.
+  assert.ok(PROPOSAL.includes('parseSolToLamports(bufferText)'));
+  assert.equal(parseSolToLamports('e.g. 0.001').ok, false);
+  const plan = computeMaxTransfer({
+    explicitBufferLamports: 0,
+    recognizedSolTransfer: true,
+    sourceMatchesMainVault: true,
+    vaultLamports: 1_000_000_000,
+  });
+  assert.equal(plan.amountLamports, 1_000_000_000);
+  // Aide affichée sous le champ buffer.
+  assert.ok(PROPOSAL.includes('Amount kept in the Main vault when using Max.'));
+  assert.ok(PROPOSAL.includes('Optional safety buffer (SOL)'));
+});
+
+check('7. "Review proposal" utilise le handler existant', () => {
+  assert.ok(PROPOSAL.includes('>Review proposal<'));
+  assert.ok(!PROPOSAL.includes('Check locally and simulate'));
+  // Le handler n'a pas changé : même pipeline.
+  const cta = PROPOSAL.slice(PROPOSAL.indexOf('>Review proposal<') - 400, PROPOSAL.indexOf('>Review proposal<'));
+  assert.ok(cta.includes('void runPipeline();'), 'le bouton relance exactement le pipeline');
+  assert.ok(PROPOSAL.includes('Checks the vault balance and simulates the transaction. Nothing is signed or sent.'));
+});
+
+check('8. aucun build/RPC/wallet/envoi déclenché par un placeholder', () => {
+  // Le placeholder n'apparaît que comme attribut d'entrée.
+  assert.equal((PROPOSAL.match(/placeholder="e\.g\. 300"/g) ?? []).length, 1);
+  assert.equal((PROPOSAL.match(/placeholder="e\.g\. 0\.001"/g) ?? []).length, 1);
+  for (const forbidden of ['signAndSendTransactions', 'signTransaction', 'sendRawTransaction']) {
+    const inputBlock = PROPOSAL.slice(
+      PROPOSAL.indexOf('Amount (SOL)'),
+      PROPOSAL.indexOf('Optional safety buffer (SOL)'),
+    );
+    assert.ok(inputBlock.length > 0, 'portion de saisie localisee');
+    assert.ok(!inputBlock.includes(forbidden));
+  }
+  // Aucune écriture de state depuis une chaîne de placeholder.
+  assert.ok(!/set(Sol|Buffer)Text\(\s*'e\.g\./.test(PROPOSAL));
+});
+
+check('9. message redondant supprimé', () => {
+  assert.ok(PROPOSAL.includes('Enter an amount to continue.'));
+  assert.ok(!PROPOSAL.includes(">Enter an amount<"));
+});
+
+check('10. bloc éducatif replié par défaut, copie HUMAINE fixe', () => {
+  assert.ok(PROPOSAL.includes("const [howItWorksOpen, setHowItWorksOpen] = useState(false);"));
+  assert.ok(PROPOSAL.includes('label="How proposal creation works"'), 'section explicative presente');
+  assert.ok(PROPOSAL.includes('expanded={howItWorksOpen}'));
+  assert.ok(PROPOSAL.includes('{howItWorksOpen ? ('));
+  // Copie HUMAINE imposée, seule information rendue par cette section.
+  assert.ok(
+    PROPOSAL.includes('Creating a proposal records the transfer instructions on Devnet.'),
+    'phrase humaine présente',
+  );
+  assert.ok(PROPOSAL.includes('Funds only move'), 'suite de la phrase humaine');
+  // Les explications d implementation ne sont PLUS importées ni rendues.
+  assert.ok(
+    !PROPOSAL.includes('PROPOSAL_CREATION_EXPLAINERS'),
+    'explications d implementation absentes du rendu',
+  );
+});
+
+check('11. destination vide : aucune erreur rendue, code interne jamais affiche', () => {
+  // La validation REELLE reste active (le builder produit toujours l erreur).
+  const empty = buildProposalCreation({
+    creator: CREATOR,
+    destination: '',
+    lamports: 20_000_000,
+    memo: null,
+    multisigPda: MULTISIG,
+    transactionIndex: 0,
+  });
+  assert.ok(hasInvalidDestinationError(empty.errors), 'la validation destination reste presente');
+  assert.equal(empty.readyForBuild, false, 'un build sans destination reste refuse');
+  // L ecran ne presente l erreur qu apres une saisie (garde destinationAttempted).
+  assert.ok(PROPOSAL.includes('const destinationAttempted = destination.trim().length > 0;'));
+  assert.ok(
+    PROPOSAL.includes('!amountAttempted && destinationAttempted && hasInvalidDestinationError(build.errors)'),
+    'l erreur destination est conditionnee a une saisie',
+  );
+  // Aucun code interne n est rendu : le vocabulaire passe par la traduction.
+  assert.ok(!PROPOSAL.includes('InvalidDestination:'), 'aucun code interne dans l ecran');
+  assert.ok(!PROPOSAL.includes('· {error}'), 'aucun code brut rendu tel quel');
+  assert.ok(PROPOSAL.includes('proposalCreationErrorMessage(error)'));
+});
+
+check('12. destination invalide : message utilisateur simple, CTA toujours protege', () => {
+  assert.equal(
+    proposalCreationErrorMessage('InvalidDestination: destination is not a valid public address.'),
+    'Enter a valid Solana address.',
+  );
+  assert.equal(INVALID_DESTINATION_MESSAGE, 'Enter a valid Solana address.');
+  assert.ok(PROPOSAL.includes('{INVALID_DESTINATION_MESSAGE}'), 'message utilisateur rendu');
+  // CTA toujours protege tant que la validation reelle n est pas satisfaite.
+  assert.ok(PROPOSAL.includes('disabled={!canRunPipeline}'));
+  assert.ok(PROPOSAL.includes('build.errors.length === 0 && pipeline.status !=='));
+});
+
+check('13. carte « sent / pending » : repli fermé par défaut (titre autoportant)', () => {
+  // Le corps de la carte est un repli FERMÉ par défaut : replié, le titre dit
+  // déjà tout l'essentiel (« envoyé / non vérifié »).
+  assert.ok(
+    PROPOSAL.includes('const [pendingVerificationOpen, setPendingVerificationOpen] = useState(false);'),
+    'repli ferme par defaut',
+  );
+  assert.ok(PROPOSAL.includes('>Proposal sent — verification pending<'), 'titre « envoyé / non vérifié »');
+  assert.ok(!/Proposal failed/i.test(PROPOSAL), 'jamais « failed » (registre honnête)');
+});
+
+setTimeout(() => {
+  console.log(`\n${passed} test(s) OK`);
+  if (process.exitCode === 1) process.exit(1);
+}, 50);

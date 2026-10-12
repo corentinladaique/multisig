@@ -1,0 +1,189 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+
+import { describeVaultBalance } from '../src/wallet/vaultBalance';
+import { isMaxSnapshotCurrent, maxSnapshotFrom, computeMaxTransfer } from '../src/vault/maxTransfer';
+
+/**
+ * Tests du hotfix Home / Max / safe area. Aucun wallet, aucun reseau.
+ * Execution : npx tsx scripts/home-hotfix.test.ts
+ */
+
+let passed = 0;
+
+function check(name: string, run: () => void): void {
+  try {
+    run();
+    passed += 1;
+    console.log(`PASS ${name}`);
+  } catch (caught: unknown) {
+    console.log(`FAIL ${name}`);
+    const detail = caught instanceof Error ? caught.stack ?? caught.message : String(caught);
+    console.log(
+      detail
+        .split('\n')
+        .filter((line) => !line.includes('node:internal'))
+        .slice(0, 4)
+        .join('\n'),
+    );
+    process.exitCode = 1;
+  }
+}
+
+const HOME = readFileSync('src/screens/ConnectScreen.tsx', 'utf8');
+const DETAILS = readFileSync('src/screens/ProposalDetailsScreen.tsx', 'utf8');
+const PROPOSAL = readFileSync('src/screens/NewProposalScreen.tsx', 'utf8');
+const LIST = readFileSync('src/screens/ProposalListScreen.tsx', 'utf8');
+
+check('1. Main vault : une seule explication, pas de doublon', () => {
+  const view = describeVaultBalance({
+    addressMatches: true,
+    lamports: 1_000_000_000,
+    status: 'loaded',
+  });
+  assert.equal(view.hint, '', 'le module ne doit plus fournir dexplication en plus des ecrans');
+  // V2 : le nom du vault est le titre unique de la carte Vault (pas de doublon).
+  const occurrences = HOME.split("{homeVaultName ?? 'Main vault'}").length - 1;
+  assert.equal(occurrences, 1, `titre du vault present ${occurrences} fois`);
+});
+
+check('2. Main vault : aucune zone vide issue dune donnee absente', () => {
+  assert.ok(
+    HOME.includes('{homeBalanceView.hint.length > 0 ? ('),
+    "l'explication conditionnelle doit etre omise si vide",
+  );
+  assert.ok(HOME.includes('shortenAddress(view.vaultAddress)'), 'adresse courte du vault');
+  assert.ok(HOME.includes('styles.balanceValue'), 'le solde doit etre mis en avant');
+});
+
+check('3. Home -> Proposal : Approve sans Refresh si le guard autorise', () => {
+  assert.ok(
+    DETAILS.includes('useEffect(() => {\n    void runDecode();'),
+    'la relecture canonique doit se declencher a l ouverture, sans condition',
+  );
+  assert.ok(
+    !DETAILS.includes('if (decodedModel === null) void runDecode()'),
+    "le decodage ne doit plus dependre du seul modele fourni par l'appelant",
+  );
+  assert.ok(DETAILS.includes('[proposal-details] availability'), 'instrumentation de developpement presente');
+  assert.ok(DETAILS.includes('Checking approval permissions…'));
+});
+
+check('4. Inbox : meme verdict, meme chemin', () => {
+  assert.ok(DETAILS.includes('const model = selfModel ?? decodedModel'));
+  assert.ok(DETAILS.includes('const effectiveGuardContext = selfGuardContext ?? guardContext'));
+  assert.ok(
+    DETAILS.includes('useWalletGuard(effectiveGuardContext ?? null)'),
+    'le guard existant doit etre utilise tel quel',
+  );
+});
+
+check('5/6/7. Max : toute modification invalide le resume et l avertissement', () => {
+  const plan = computeMaxTransfer({
+    recognizedSolTransfer: true,
+    sourceMatchesMainVault: true,
+    vaultLamports: 1_000_000_000,
+  });
+  const snapshot = maxSnapshotFrom(plan, 'DEST', 1_000_000_000);
+  assert.ok(snapshot !== null);
+
+  // Correspondance exacte : resume affichable.
+  assert.equal(
+    isMaxSnapshotCurrent(snapshot, {
+      amountLamports: 1_000_000_000,
+      bufferLamports: 0,
+      destination: 'DEST',
+      vaultLamports: 1_000_000_000,
+    }),
+    true,
+  );
+  // Montant modifie.
+  assert.equal(
+    isMaxSnapshotCurrent(snapshot, {
+      amountLamports: 999_999_999,
+      bufferLamports: 0,
+      destination: 'DEST',
+      vaultLamports: 1_000_000_000,
+    }),
+    false,
+  );
+  // Destination modifiee.
+  assert.equal(
+    isMaxSnapshotCurrent(snapshot, {
+      amountLamports: 1_000_000_000,
+      bufferLamports: 0,
+      destination: 'AUTRE',
+      vaultLamports: 1_000_000_000,
+    }),
+    false,
+  );
+  // Buffer modifie.
+  assert.equal(
+    isMaxSnapshotCurrent(snapshot, {
+      amountLamports: 1_000_000_000,
+      bufferLamports: 1_000,
+      destination: 'DEST',
+      vaultLamports: 1_000_000_000,
+    }),
+    false,
+  );
+  // Solde de reference different.
+  assert.equal(
+    isMaxSnapshotCurrent(snapshot, {
+      amountLamports: 1_000_000_000,
+      bufferLamports: 0,
+      destination: 'DEST',
+      vaultLamports: 500_000_000,
+    }),
+    false,
+  );
+
+  assert.ok(PROPOSAL.includes('{maxSummaryVisible && maxPlan !== null ? ('), 'le resume est conditionne');
+  assert.ok(
+    PROPOSAL.includes('}, [build, bufferText, memo, destination]);'),
+    'une modification invalide build, preflight et simulation',
+  );
+});
+
+check('8. safe area : bandeau Devnet protege par la source partagee', () => {
+  // La Safe Area est desormais une source unique partagee (SAFE_TOP_PADDING) :
+  // plus de calcul local de la barre de statut ni de spacer safeTop propre.
+  assert.ok(
+    LIST.includes("from '../ui/safeAreaPadding'") && LIST.includes('SAFE_TOP_PADDING'),
+    'ProposalListScreen doit utiliser le helper partage',
+  );
+  assert.ok(
+    !LIST.includes('StatusBar.currentHeight'),
+    'plus de calcul local de la hauteur de barre',
+  );
+  assert.ok(!LIST.includes('safeTop'), 'plus de spacer safeTop local');
+  // Une seule source de padding superieur : le token apparait une fois dans
+  // l'import et une seule fois applique au conteneur (pas de double inset).
+  assert.equal(
+    LIST.split('SAFE_TOP_PADDING').length - 1,
+    2,
+    'SAFE_TOP_PADDING doit etre importe une fois et applique une seule fois',
+  );
+});
+
+check('9. Home : action reelle vers la proposition, details transferes vers Vault Details', () => {
+  const actions = HOME.indexOf('To do');
+  assert.ok(actions > 0, 'la section d action existe');
+  assert.ok(HOME.includes('setOpenDecisionIndex(decision.index)'), 'action reelle vers la proposition');
+  // Hotfix de coherence : Home ne rend PLUS le bloc technique redondant.
+  assert.ok(!HOME.includes('Technical details'), 'le bloc technique est retire de Home');
+  assert.ok(HOME.includes('View vault details'), 'acces explicite a l unique vue detaillee');
+});
+
+check('10. aucun chargement automatique ne sollicite le wallet', () => {
+  const decode = DETAILS.slice(DETAILS.indexOf('const runDecode'), DETAILS.indexOf('void runDecode();'));
+  assert.ok(decode.length > 0);
+  assert.ok(!/signAndSendTransactions|authorize\(|\.connect\(/.test(decode));
+  const homeRefresh = HOME.slice(HOME.indexOf('const refreshHomeBalance'), HOME.indexOf('const homeBalanceView'));
+  assert.ok(!/signAndSendTransactions|authorize\(/.test(homeRefresh));
+});
+
+setTimeout(() => {
+  console.log(`\n${passed} test(s) OK`);
+  if (process.exitCode === 1) process.exit(1);
+}, 50);

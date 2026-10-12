@@ -357,3 +357,251 @@ Blocage restant, hors app : aucune vault transaction n'existe dans la fixture,
 donc les tâches T09 (décodage), T11 (approbation) et T12 (exécution) ne sont pas
 testables en l'état — il faudra créer une proposition de test depuis un script
 machine, sous autorisation explicite.
+
+## UI refactor backlog
+
+Audit UI réalisé en lecture seule (aucun code applicatif modifié). À traiter
+pendant la mission de refonte UI. Aucun élément de cette section n'est
+implémenté aujourd'hui.
+
+### High priority — accessibility
+
+- TransactionReviewScreen :
+  corriger le contraste du bouton principal désactivé.
+- Le texte blanc `#ffffff` sur le fond désactivé `#9ca3af`
+  avec `opacity: 0.7` est insuffisamment contrasté
+  (environ 2,1–2,3:1, sous le seuil WCAG AA de 4,5:1).
+- Utiliser soit :
+  - un texte foncé `#101317` sur l'état désactivé ;
+  - soit un fond désactivé suffisamment sombre.
+- Vérifier également qu'aucun `buttonText` blanc
+  ne soit utilisé sur la variante `secondary` `#f3f4f6`.
+
+### Shared header and Safe Area
+
+Créer ultérieurement :
+
+`src/ui/ScreenHeader.tsx`
+
+API envisagée :
+
+- `title` ;
+- `onBack` ;
+- `backLabel` :
+  - `Back` ;
+  - `Cancel creation` ;
+  - `Go to Inbox` ;
+- `badge` optionnel :
+  - `label` ;
+  - `tone: devnet | readonly` ;
+- `secondaryAction` optionnelle ;
+- `showInset`.
+
+Responsabilités :
+
+- porter le fond du header jusque dans la Safe Area ;
+- utiliser `SAFE_TOP_PADDING` comme unique source de vérité ;
+- ajouter un espacement visuel après l'inset (`DEVNET` doit respirer) ;
+- afficher une rangée cohérente :
+  `Back | Title | Network badge` ;
+- éviter tout double inset (les écrans se rendant en exclusion mutuelle,
+  un seul header porte l'inset) ;
+- préparer la future migration vers `useSafeAreaInsets`
+  (`react-native-safe-area-context` n'est pas installé : aucune dépendance
+  native ne doit être ajoutée avant la refonte).
+
+### Home header
+
+- supprimer le bandeau noir isolé : `keyboardAvoider` n'a aucun
+  `backgroundColor`, la zone d'inset hérite du fond de fenêtre Android ;
+- donner à la zone Safe Area le même fond que le header ;
+- harmoniser Home avec les autres écrans ;
+- conserver le solde du Main vault comme information principale.
+
+### Navigation labels
+
+Remplacer selon le contexte :
+
+- `CreateVaultScreen` :
+  `Cancel and back to inbox`
+  → `Cancel creation` si un draft est abandonné ;
+  → `Go to Inbox` si aucune saisie n'est abandonnée.
+
+- `TransactionReviewScreen` :
+  `Cancel`
+  → `Back` lorsqu'il s'agit d'un simple retour.
+
+- `NewProposalScreen` :
+  `Cancel`
+  → `Back` si le formulaire est vide ;
+  → `Cancel creation` si destination, montant ou mémo sont renseignés.
+
+Conserver les boutons `Cancel` des `Alert` lorsqu'ils annulent réellement
+une confirmation ou une action.
+
+Aligner les `accessibilityLabel` avec les libellés visibles.
+
+### Proposal list
+
+Prévoir des filtres locaux :
+
+- Action required ;
+- Active ;
+- Completed ;
+- All.
+
+Prévoir une archive locale non destructive :
+
+- ne rien supprimer on-chain ;
+- masquer seulement les propositions archivées dans la vue par défaut ;
+- permettre `Restore` ;
+- conserver un accès à l'historique complet.
+
+### Wallet roles terminology
+
+Afficher en langage utilisateur :
+
+- `Initiate` → Create proposals ;
+- `Vote` → Approve proposals ;
+- `Execute` → Execute approved proposals.
+
+Conserver les noms Squads techniques dans Technical details.
+
+### Main navigation menu
+
+Prévoir un bouton menu visible dans le futur header partagé :
+
+`☰`
+
+Objectif :
+
+- alléger Home ;
+- retirer les actions pédagogiques et secondaires du flux principal
+  du vault ;
+- conserver un accès permanent à l'aide, même sans wallet ou multisig
+  chargé.
+
+Contenu envisagé :
+
+- Learn about multisig ;
+- Help & Security ;
+- Settings ;
+- About Pocket Multisig.
+
+Action secondaire :
+
+- Reset onboarding.
+
+Règles UX :
+
+1. `Learn about multisig` ne doit plus apparaître comme un CTA principal
+   au milieu du tableau de bord Home.
+2. `Reset onboarding` doit être placé dans `Help & Security` ou `Settings`,
+   et non parmi les actions du vault.
+3. Le bouton menu doit rester accessible :
+   - avant connexion wallet ;
+   - après connexion ;
+   - avant Load multisig ;
+   - après chargement d'un multisig.
+4. L'ouverture du menu ne doit provoquer :
+   - aucun RPC ;
+   - aucun wallet prompt ;
+   - aucune signature ;
+   - aucune transaction.
+5. Le menu ne doit jamais masquer définitivement l'action Back d'un écran
+   enfant.
+6. Le menu doit respecter :
+   - Safe Area ;
+   - accessibilité ;
+   - fermeture par swipe ou tap extérieur ;
+   - bouton `Close` explicite ;
+   - retour Android cohérent.
+7. Ne pas implémenter immédiatement un drawer natif ni installer un package
+   de navigation.
+8. Étudier pendant la refonte UI si le meilleur modèle est :
+   - menu latéral ;
+   - panneau modal ;
+   - page `More / Settings`.
+9. Conserver Home centré sur :
+   - Main vault ;
+   - Actions required ;
+   - Quick actions.
+
+### Clipboard API — dette technique
+
+- L'incrément Paste utilise le module Clipboard **interne** du cœur de
+  React Native 0.86 (`Libraries/Components/Clipboard/Clipboard`) : il est
+  **déprécié** et isolé dans un seul fichier (`src/ui/AddressInput.tsx`).
+- Solution provisoire : aucun écran n'importe Clipboard directement.
+- Migration future nécessaire vers une API Clipboard **publique**
+  (`@react-native-clipboard/clipboard`).
+- Cette migration exigera une **installation de package** et un
+  **rebuild natif** : elle doit faire l'objet d'une autorisation explicite.
+- Aucun package ne doit être installé dans la mission en cours.
+
+### Cost display and fiat estimation
+
+- Les coûts visibles par l'utilisateur doivent être en **SOL**, jamais en lamports.
+- Les **lamports restent l'unité interne exacte** (construction, simulation, vérification).
+- Conversion **SOL/USD indicative** future uniquement.
+- **Source de prix externe** requise (aucune valeur on-chain, aucun secret, aucun package).
+- **Horodatage** du prix requis à l'affichage.
+- **Échec gracieux** requis : prix indisponible ⇒ SOL seul, afficher « USD estimate unavailable. », jamais bloquer une création.
+- **Sans impact** sur la construction de la transaction.
+- Le SOL **Devnet n'a aucune valeur monétaire réelle** : avertissement obligatoire affiché.
+- Le dollar affiché n'est **qu'une comparaison avec le marché Mainnet**, jamais la valeur réelle des fonds, un débit, une garantie de prix ni un conseil financier.
+
+### Backlog — autres affichages de lamports
+
+Les emplacements suivants affichent encore des lamports, mais UNIQUEMENT dans
+une section « Technical details » (jamais dans une décision utilisateur) :
+`src/screens/TransactionReviewScreen.tsx` et
+`src/screens/TransactionTechnicalDetails.tsx` (`(… lamports)`).
+
+Migré dans le hotfix des montants : `src/screens/NewProposalScreen.tsx`
+(saisie et lecture en **SOL** ; lamports confinés à « Technical details »).
+`src/screens/MultisigDetailsScreen.tsx` : solde affiché en SOL (`balanceView.sol`).
+
+### Backlog — saisie du champ Amount (non implémenté ici)
+
+- Saisie « . » : normalisation VISUELLE en « 0. » (jamais de réécriture d'une
+  valeur déjà valide).
+- Ne jamais modifier une valeur déjà valide pendant la frappe.
+- Conversion exacte toujours limitée à 9 décimales (1 SOL = 1e9 lamports).
+- Le placeholder (« e.g. 1.5 ») ne doit JAMAIS devenir la valeur transactionnelle.
+
+### Backlog — confirmation explicite du threshold 1 of 2
+
+- Pour deux membres, 2 of 2 est le défaut recommandé et affiché
+  (« Recommended: 2 of 2 » / « Both members must approve sensitive actions. »).
+- Choisir 1 of 2 affiche « Low security configuration » + le détail, sans
+  blocage automatique (le moteur Squads accepte threshold 1).
+- À IMPLÉMENTER (hors de ce hotfix, pour ne pas créer un parcours fragile) :
+  une confirmation MODALE dédiée « Use 1 of 2 anyway » avant de pouvoir créer
+  le vault. Aujourd'hui, l'avertissement est affiché et la configuration reste
+  créable ; aucun threshold on-chain n'est modifié silencieusement.
+
+### Backlog — répartition de la section « More » (UI V2, Groupe 1)
+
+La section repliable « More » du Home V2 (voir `src/screens/ConnectScreen.tsx`)
+existe de façon TEMPORAIRE pour le Groupe 1. Elle regroupe aujourd'hui :
+Add existing multisig (+ loader manuel), Create a vault, Inbox, Learn,
+Disconnect, Reset wallet session.
+
+À RÉPARTIR lors de l'arrivée de la navigation V2, sans lancer le refactor
+maintenant :
+
+- « Add existing multisig » et « Create a vault » → écran **Multisigs** ;
+- « Inbox » → écran **Inbox** ;
+- « Learn » → écran **Account** (ou Help & Security) ;
+- « Disconnect » / « Reset wallet session » → écran **Account**.
+
+Aucune logique métier n'est dupliquée : ces entrées réutilisent les handlers
+existants (`msig.load`, `setVaultCreationOpen`, `setInboxOpen`, `onboarding.open`,
+`onDisconnect`, `onResetWalletSession`). Le déplacement doit se limiter à la
+présentation ; aucun handler, aucun RPC, aucune navigation fonctionnelle ne
+doit être modifié par cette répartition.
+
+### Future
+
+- Future setting: persist Hide balances and add optional shake-to-hide if a supported sensor API is already available.

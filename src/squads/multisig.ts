@@ -15,6 +15,8 @@ export interface MultisigView {
   address: string;
   configAuthority: string;
   members: MemberView[];
+  /** `null` si le programme n'a pas de collecteur de rent configure. */
+  rentCollector: string | null;
   threshold: number;
   timeLock: number;
   transactionIndex: number;
@@ -71,15 +73,15 @@ export async function loadMultisig(
     const raw = caught instanceof Error ? caught.message : String(caught);
     if (/does not exist|no data|AccountNotFound|could not find account|unable to find/i.test(raw)) {
       throw new MultisigLookupError(
-        'Aucun compte à cette adresse sur devnet. Vérifie qu’il s’agit bien d’un multisig Squads v4 déployé sur devnet.',
+        'No account at this address on devnet. Check that it is a Squads v4 multisig deployed on devnet.',
       );
     }
     if (/deserial|beet|range|slice|out of bounds/i.test(raw)) {
       throw new MultisigLookupError(
-        `Ce compte existe mais n’est pas un multisig Squads v4 lisible (${raw}).`,
+        `This account exists but is not a readable Squads v4 multisig (${raw}).`,
       );
     }
-    throw new MultisigLookupError(`Lecture impossible : ${raw}`);
+    throw new MultisigLookupError(`Could not read the account: ${raw}`);
   }
 
   // Dérivation locale (aucun appel RPC) via l'utilitaire officiel.
@@ -92,6 +94,8 @@ export async function loadMultisig(
       address: member.key.toBase58(),
       roles: decodeRoles(member.permissions),
     })),
+    // Meme deserialisation, aucun appel supplementaire : le champ etait deja lu.
+    rentCollector: account.rentCollector === null ? null : account.rentCollector.toBase58(),
     threshold: account.threshold,
     timeLock: account.timeLock,
     transactionIndex: Number(account.transactionIndex),

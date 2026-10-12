@@ -1,20 +1,33 @@
-// Écran de revue de transaction — LECTURE SEULE.
-// Ce composant n'appelle AUCUNE fonction d'écriture : ni approve, ni execute,
-// ni signTransaction, ni signAndSendTransaction, ni aucune fonction RPC.
-// Il affiche un modèle déjà construit (voir src/types/transactionReview.ts).
-import { useCallback, useState } from 'react';
-import { Platform, Pressable, ScrollView, StatusBar, StyleSheet, Text, View } from 'react-native';
-import { PublicKey, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
+// VUE TECHNIQUE FACULTATIVE — READ ONLY.
+// Affiche uniquement des détails de transaction décodés : programme, comptes,
+// source, destination, montant, lamports et avertissements. Aucune
+// autorisation wallet, aucune signature, aucun envoi de transaction : la seule
+// action de cet écran est Back (retour vers l'écran appelant).
+// L'approbation d'une proposition se fait EXCLUSIVEMENT depuis
+// ProposalDetailsScreen (signAndSendProposalApproval).
+// Lecture seule sur modèle déjà construit (voir src/types/transactionReview.ts).
+//
+// UI V2 « Seeker style » : seule la présentation a changé. Le CTA optionnel
+// « Create proposal » est fourni par l'appelant (création d'une proposition) ;
+// il n'est rendu QUE si `onCreate` est passé. Aucun wallet n'est ouvert depuis
+// cet écran : le callback appartient au flux de l'appelant, qui garde sa double
+// confirmation explicite.
+import { useCallback, useEffect, useState } from 'react';
+import { BackHandler, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { PublicKey } from '@solana/web3.js';
 import * as multisig from '@sqds/multisig';
-import { useMobileWallet } from '@wallet-ui/react-native-web3js';
+
+import { showsPreExecutionCopy } from '../ui/proposalDisplayState';
 
 import {
   isAlreadyApprovedVerdict,
   useWalletGuard,
 } from '../wallet/useWalletGuard';
 import { checkReviewAllowlist } from '../squads/instructionAllowlist';
-import { planProposalApproval, type ApprovalPlan } from '../squads/proposalApproval';
-import { connection } from '../solana/connection';
+import { SAFE_TOP_PADDING } from '../ui/safeAreaPadding';
+import { colors, radii, spacing, typography } from '../ui/theme';
+import { DevnetPill, InfoBox, InfoText } from '../ui/v2/primitives';
+import { REVIEW_SCREEN_CAPABILITIES } from './reviewScreenCapabilities';
 import { TransactionTechnicalDetails } from './TransactionTechnicalDetails';
 import type { GuardVerdict, ReviewGuardContext } from '../wallet/useWalletGuard';
 
@@ -39,17 +52,41 @@ function fieldText(field: ReviewField<string>): string {
   return field.known ? field.value : 'Unknown';
 }
 
-/** Montant : SOL et lamports bruts, sans aucun arrondi. */
+/**
+ * Montant principal : SOL seul. Les lamports exacts ne disparaissent pas pour
+ * autant : ils vivent dans les details techniques bruts (voir `rawLamports`).
+ * `formatLamportsExact` ne fait AUCUN arrondi : la valeur affichee est exacte.
+ */
 function amountText(field: ReviewField<SolAmount>): string {
   if (!field.known) return 'Unknown';
-  return `${formatLamportsExact(field.value.lamports)} (${field.value.lamports} lamports)`;
+  return formatLamportsExact(field.value.lamports);
+}
+
+/** Lamports bruts, pour la section technique uniquement. */
+function rawLamports(field: ReviewField<SolAmount>): string | null {
+  return field.known ? `${field.value.lamports} lamports` : null;
 }
 
 export interface TransactionReviewScreenProps {
   model: TransactionReviewModel;
   onBack: () => void;
+  /**
+   * §1 — Etat TERMINAL verifie (proposition executee). La revue ne doit alors
+   * PLUS afficher de copie d'AVANT execution : le transfert a deja eu lieu.
+   */
+  executed?: boolean;
   /** Données déjà chargées, injectées par l'appelant. Aucun RPC dans le guard. */
   guardContext?: ReviewGuardContext | null;
+  /**
+   * CTA optionnel de création, fourni par l'appelant (préparation + double
+   * confirmation + wallet restent chez lui). Absent ⇒ aucun CTA de création.
+   */
+  onCreate?: () => void;
+  /**
+   * Vrai uniquement si la simulation réelle du flux appelant a réussi. Aucun
+   * état de simulation n'est inventé ici : sans ce drapeau, rien n'est affiché.
+   */
+  simulationPassed?: boolean;
 }
 
 /**
@@ -75,19 +112,18 @@ export function computeCanConfirm(
 export function TransactionReviewScreen({
   model,
   onBack,
+  executed = false,
   guardContext = null,
+  onCreate,
+  simulationPassed = false,
 }: TransactionReviewScreenProps) {
-  // Aucune confirmation n'est possible dans cette mission, y compris pour un
-  // décodage complet : le branchement on-chain n'existe pas encore (T11/T12).
+  // Avertissements affichés quand le décodage est incomplet ou porte des notes.
   const needsWarning = model.decodeStatus !== 'decoded' || model.notes.length > 0;
 
+  // Guard et allowlist restent évalués, mais UNIQUEMENT pour afficher un état
+  // informatif : aucune action d'écriture n'est branchée sur cet écran.
   const guard = useWalletGuard(guardContext);
-  const { signAndSendTransactions } = useMobileWallet();
   const allowlist = checkReviewAllowlist(model);
-
-  // T11a : condition locale stricte. Aucune donnée réseau n'est relue ici, et
-  // aucune fonction d'écriture n'est branchée : le bouton final de la seconde
-  // confirmation reste désactivé dans cette mission.
   const canConfirm = computeCanConfirm(model, guard.status, allowlist.status);
 
   // Cas utilisateur positif : le wallet connecté a DÉJÀ approuvé. Le verdict
@@ -129,10 +165,10 @@ export function TransactionReviewScreen({
       ? `${approvalsConfirmed} of ${guardThreshold} approvals confirmed`
       : fieldText(model.action);
   const decisionState = proposalApproved
-    ? 'Ready to execute'
+    ? 'Ready to execute (from Proposal Details)'
     : alreadyApproved
       ? 'Waiting for 1 more approval'
-      : 'Execution is not implemented yet';
+      : 'Read-only technical view';
 
   // PDA de la proposition : derivation locale par le SDK, aucun appel RPC.
   const proposalAddress = (() => {
@@ -147,277 +183,59 @@ export function TransactionReviewScreen({
     }
   })();
 
-  // T11c : étape « ready to approve ». Le bouton final est branché sur la
-  // PRÉPARATION uniquement — aucune ouverture du wallet, aucune signature,
-  // aucun envoi. L'appel MWA reste hors de portée de cette mission.
-  const [plan, setPlan] = useState<ApprovalPlan | null>(null);
-  const [signature, setSignature] = useState<string | null>(null);
-  const [sendError, setSendError] = useState<string | null>(null);
-  const [sending, setSending] = useState(false);
-  // Une seule tentative d'envoi autorisée pour toute la session d'écran.
-  const [sendAttempted, setSendAttempted] = useState(false);
-  const [planning, setPlanning] = useState(false);
-
-  // Seconde confirmation locale (T11a) : aucun envoi, le bouton final reste
-  // désactivé. Cet état n'ouvre aucun chemin d'écriture.
-  const [confirmStep, setConfirmStep] = useState(false);
-
   const handleBack = useCallback(() => {
     onBack();
   }, [onBack]);
 
-  const handleCancelConfirm = useCallback(() => {
-    setConfirmStep(false);
-  }, []);
+  // Retour systeme Android (bouton physique et geste) : revient a l'ecran
+  // appelant. Sans ce handler, un geste depuis cet ecran fermait l'application.
+  useEffect(() => {
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      handleBack();
+      return true;
+    });
+    return () => subscription.remove();
+  }, [handleBack]);
 
-  const handleRequestApproval = useCallback(async () => {
-    if (guardContext === null || guardContext.multisig === null) return;
-    if (guardContext.walletAddress === null) return;
-    setPlanning(true);
-    try {
-      const result = await planProposalApproval({
-        connection,
-        multisigPda: new PublicKey(guardContext.multisig.address),
-        transactionIndex: model.proposalIndex,
-        walletAddress: guardContext.walletAddress,
-        preconditions: {
-          guardStatus: guard.status,
-          allowlistStatus: allowlist.status,
-          guardReasons: guard.reasons,
-        },
-      });
-      setPlan(result);
-    } finally {
-      setPlanning(false);
-    }
-  }, [allowlist.status, guard.reasons, guard.status, guardContext, model.proposalIndex]);
-
-  const handleCancelPlan = useCallback(() => {
-    setPlan(null);
-  }, []);
-
-  /**
-   * T11d : UNE SEULE tentative d'envoi. Aucun retry, aucune reconstruction
-   * après un retour de signature. `vaultTransactionExecute` n'est jamais
-   * atteignable depuis ce composant.
-   */
-  const handleSendApproval = useCallback(async () => {
-    if (plan === null || plan.status !== 'ready') return;
-    if (sendAttempted || sending) return;
-    if (guardContext === null || guardContext.walletAddress === null) return;
-    setSendAttempted(true);
-    setSending(true);
-    setSendError(null);
-    try {
-      const latest = await connection.getLatestBlockhash('confirmed');
-      const message = new TransactionMessage({
-        payerKey: new PublicKey(guardContext.walletAddress),
-        recentBlockhash: latest.blockhash,
-        instructions: [plan.instruction],
-      }).compileToV0Message([]);
-      const transaction = new VersionedTransaction(message);
-      const minContextSlot = await connection.getSlot('confirmed');
-      // Unique demande MWA : le wallet signe ET envoie.
-      const returned = await signAndSendTransactions(transaction, minContextSlot);
-      setSignature(returned);
-    } catch (caught: unknown) {
-      setSendError(caught instanceof Error ? caught.message : String(caught));
-    } finally {
-      setSending(false);
-    }
-  }, [connection, guardContext, plan, sendAttempted, sending, signAndSendTransactions]);
-
-
-
-  if (plan !== null) {
-    // Étape « ready to approve » : résumé public uniquement. Aucun appel
-    // wallet, aucune signature, aucun envoi — l'appel MWA est délibérément
-    // laissé hors de ce composant.
-    const threshold = guardContext?.multisig?.threshold ?? 0;
-    // Le bouton final n'est actif qu'après TOUS les contrôles, et une seule fois.
-    const canSend = plan.status === 'ready' && !sendAttempted && !sending;
-    return (
-      <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
-        <Text style={styles.badge}>DEVNET</Text>
-        <Text style={styles.title}>Ready to approve</Text>
-        <Text style={styles.previewBanner}>Prepared only — no signature requested</Text>
-
-        {plan.status === 'refused' ? (
-          <View style={styles.card}>
-            <Text style={styles.fieldLabel}>Refused</Text>
-            {plan.reasons.map((reason) => (
-              <Text key={reason} style={styles.warnText}>
-                • {reason}
-              </Text>
-            ))}
-          </View>
-        ) : (
-          <View style={styles.card}>
-            <Text style={styles.fieldLabel}>Network</Text>
-            <Text style={styles.fieldValue}>Devnet</Text>
-
-            <Text style={styles.fieldLabel}>Multisig configuration address</Text>
-            <Text selectable style={styles.fieldValue}>
-              {model.multisigAddress}
-            </Text>
-
-            <Text style={styles.fieldLabel}>Proposal</Text>
-            <Text style={styles.fieldValue}>#{model.proposalIndex}</Text>
-
-            <Text style={styles.fieldLabel}>Proposal PDA</Text>
-            <Text selectable style={styles.fieldValue}>
-              {plan.proposalAddress}
-            </Text>
-
-            <Text style={styles.fieldLabel}>Member wallet</Text>
-            <Text selectable style={styles.fieldValue}>
-              {model.signerWallet}
-            </Text>
-
-            <Text style={styles.fieldLabel}>Proposal status</Text>
-            <Text style={styles.fieldValue}>{plan.proposalStatus}</Text>
-
-            <Text style={styles.fieldLabel}>Approvals</Text>
-            <Text style={styles.fieldValue}>
-              {plan.approvedAddresses.length} / {threshold}
-            </Text>
-
-            <Text style={styles.fieldLabel}>Program</Text>
-            <Text selectable style={styles.fieldValue}>
-              {plan.instruction.programId.toBase58()}
-            </Text>
-
-            <Text style={styles.fieldLabel}>Execution</Text>
-            <Text style={styles.fieldValue}>No automatic execution.</Text>
-
-            {signature !== null ? (
-              <>
-                <Text style={styles.fieldLabel}>Signature</Text>
-                <Text selectable style={styles.fieldValue}>
-                  {signature}
-                </Text>
-              </>
-            ) : null}
-          </View>
-        )}
-
-        {sendError !== null ? (
-          <Text style={styles.warnText}>Send failed: {sendError}</Text>
-        ) : null}
-
-        <Pressable
-          accessibilityRole="button"
-          accessibilityState={{ disabled: !canSend }}
-          disabled={!canSend}
-          onPress={() => {
-            void handleSendApproval();
-          }}
-          style={[styles.button, canSend ? null : styles.disabled]}
-        >
-          <Text style={styles.buttonText}>
-            {sending ? 'Waiting for wallet…' : 'Approve now'}
-          </Text>
-        </Pressable>
-
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Cancel approval plan"
-          onPress={handleCancelPlan}
-          style={[styles.button, styles.secondary]}
-        >
-          <Text style={styles.secondaryText}>Cancel</Text>
-        </Pressable>
-      </ScrollView>
-    );
-  }
-
-  if (confirmStep) {
-    // Seconde confirmation, strictement locale : rappel du contenu réel, puis
-    // Cancel ou un bouton final DÉSACTIVÉ. Aucun appel réseau, aucune signature.
-    return (
-      <ScrollView
-        contentContainerStyle={styles.container}
-        keyboardShouldPersistTaps="handled"
-      >
-        <Text style={styles.badge}>DEVNET</Text>
-        <Text style={styles.title}>Confirm approval</Text>
-        <Text style={styles.previewBanner}>Second confirmation — no send in this build</Text>
-
-        <View style={styles.card}>
-          <Text style={styles.fieldLabel}>Network</Text>
-          <Text style={styles.fieldValue}>Devnet</Text>
-
-          <Text style={styles.fieldLabel}>Proposal</Text>
-          <Text style={styles.fieldValue}>#{model.proposalIndex}</Text>
-
-          <Text style={styles.fieldLabel}>Multisig configuration address</Text>
-          <Text selectable style={styles.fieldValue}>
-            {model.multisigAddress}
-          </Text>
-
-          <Text style={styles.fieldLabel}>Vault address</Text>
-          <Text selectable style={styles.fieldValue}>
-            {model.vaultAddress}
-          </Text>
-
-          <Text style={styles.fieldLabel}>Connected wallet</Text>
-          <Text selectable style={styles.fieldValue}>
-            {model.signerWallet}
-          </Text>
-
-          <Text style={styles.fieldLabel}>Action</Text>
-          <Text style={styles.fieldValue}>{fieldText(model.action)}</Text>
-
-          <Text style={styles.fieldLabel}>Destination</Text>
-          <Text selectable style={styles.fieldValue}>
-            {fieldText(model.destination)}
-          </Text>
-
-          <Text style={styles.fieldLabel}>Amount</Text>
-          <Text style={styles.fieldValue}>{amountText(model.amount)}</Text>
-
-          <Text style={styles.fieldLabel}>Approvals already recorded</Text>
-          <Text style={styles.fieldValue}>0</Text>
-
-          <Text style={styles.fieldLabel}>Execution</Text>
-          <Text style={styles.fieldValue}>No automatic execution.</Text>
-        </View>
-
-        <Pressable
-          accessibilityRole="button"
-          accessibilityState={{ disabled: !canConfirm || planning }}
-          disabled={!canConfirm || planning}
-          onPress={() => {
-            // Prépare l'approbation : aucune ouverture du wallet, aucune
-            // signature, aucun envoi. Uniquement un résumé public.
-            void handleRequestApproval();
-          }}
-          style={[styles.button, canConfirm ? null : styles.disabled]}
-        >
-          <Text style={styles.buttonText}>
-            {planning ? 'Preparing…' : 'Approve proposal'}
-          </Text>
-        </Pressable>
-
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Cancel approval"
-          onPress={handleCancelConfirm}
-          style={[styles.button, styles.secondary]}
-        >
-          <Text style={styles.secondaryText}>Cancel</Text>
-        </Pressable>
-      </ScrollView>
-    );
-  }
+  // (Aucun état ni handler de signature : cet écran n'envoie rien.)
+  /** Diagnostics techniques repliés par défaut (présentation seule). */
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   return (
     <ScrollView
-      contentContainerStyle={styles.container}
+      contentContainerStyle={[styles.container, SAFE_TOP_PADDING]}
       keyboardShouldPersistTaps="handled"
+      style={styles.scrollView}
     >
-      <Text style={styles.badge}>DEVNET</Text>
-      <Text style={styles.title}>Transaction review</Text>
+      <View style={styles.headerRow}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Back to proposal details"
+          onPress={handleBack}
+          style={({ pressed }) => [styles.backButton, pressed && styles.backButtonPressed]}
+        >
+          <Text style={styles.backGlyph}>‹</Text>
+        </Pressable>
+        <DevnetPill />
+      </View>
+
+      <Text style={styles.title}>Review proposal</Text>
+      <Text style={styles.subtitle}>
+        Review the decoded transaction details. Approval is performed from Proposal
+        Details.
+        {REVIEW_SCREEN_CAPABILITIES.readOnly
+          ? ' No wallet action is available on this screen.'
+          : ''}
+      </Text>
+
+      {/* Résultat de simulation : affiché UNIQUEMENT si la simulation réelle du
+          flux appelant a réussi. */}
+      {simulationPassed ? (
+        <InfoBox glyph="✓" style={styles.infoBox} tone="success">
+          <InfoText tone="success">Simulation passed</InfoText>
+          <InfoText tone="success">The transaction is valid.</InfoText>
+        </InfoBox>
+      ) : null}
 
       <Text style={[styles.previewBanner, model.isPreview ? null : styles.onchainBanner]}>
         {model.isPreview
@@ -457,248 +275,329 @@ export function TransactionReviewScreen({
         {model.destination.known ? abbreviateAddress(model.destination.value) : 'Unknown'}
       </Text>
 
-      {/* 5. Progression des approbations */}
+      {/* 5. From : les fonds partent du Main vault (source décodée si connue). */}
+      <Text style={styles.fieldLabel}>From</Text>
+      <Text style={styles.fieldValue}>
+        {model.source.known ? `Main vault · ${abbreviateAddress(model.source.value)}` : 'Main vault'}
+      </Text>
+
+      {/* 6. Progression des approbations */}
       <Text style={styles.fieldLabel}>Approvals</Text>
       <Text style={styles.fieldValue}>
         {approvalsConfirmed} of {guardThreshold} confirmed
       </Text>
 
-      {/* 6. Avertissement ou prochaine etape */}
+      {/* 7. Proposé par (signataire réel du modèle, jamais inventé). */}
+      <Text style={styles.fieldLabel}>Proposed by</Text>
+      <Text style={styles.fieldValue}>
+        {model.signerWallet.length > 0 ? abbreviateAddress(model.signerWallet) : 'Unknown'}
+      </Text>
+
+      {/* 8. Coût estimé : uniquement si les frais sont réellement décodés. */}
+      {model.fee.known ? (
+        <>
+          <Text style={styles.fieldLabel}>Estimated cost</Text>
+          <Text style={styles.fieldValue}>{amountText(model.fee)}</Text>
+        </>
+      ) : null}
+
+      {/* 9. Lecture seule : aucun CTA d'approbation ici, on informe seulement. */}
+      <Text style={styles.fieldLabel}>Approval</Text>
+      <Text style={styles.fieldNote}>
+        {showsPreExecutionCopy(executed)
+          ? canConfirm
+            ? 'Guard and allowlist are satisfied. Approval is performed from Proposal Details.'
+            : 'Approval is not available for this proposal in its current state.'
+          : 'This proposal has been executed. No further approval is possible.'}
+      </Text>
+
+      {/* 10. §1 — Rappel de securite SEULEMENT si l'execution est encore a venir. */}
+      {showsPreExecutionCopy(executed) ? (
+        <InfoBox glyph="ℹ" style={styles.infoBox}>
+          <InfoText>
+            The transfer occurs only after the approval threshold is reached and an
+            authorized member executes the proposal.
+          </InfoText>
+        </InfoBox>
+      ) : (
+        <InfoBox style={styles.infoBox}>
+          <InfoText>
+            The approval threshold was reached and this transfer has been executed
+            on-chain.
+          </InfoText>
+        </InfoBox>
+      )}
+
+      {/* 11. Avertissement ou prochaine etape */}
       {needsWarning || (guard.status === 'blocked' && !showUserState) ? (
-        <View style={styles.warnBox}>
+        <InfoBox glyph="⚠" style={[styles.infoBox, styles.warningBox]} tone="warning">
           {model.decodeStatus !== 'decoded' ? (
-            <Text style={styles.warnText}>
+            <InfoText tone="warning">
               {model.decodeStatus === 'partial'
                 ? 'Warning: instruction only partially decoded. A critical field is missing. Verify on a devnet explorer before acting.'
                 : 'Warning: program not recognized. No interpretation was attempted. Verify on a devnet explorer before acting.'}
-            </Text>
+            </InfoText>
           ) : null}
           {guard.status === 'blocked' && !showUserState
-            ? guard.reasons.map((reason) => (
-                <Text key={reason} style={styles.warnText}>
-                  • {reason}
-                </Text>
-              ))
+            ? // Un contexte absent n'est PAS un refus : c'est un chargement en
+              // cours. Le refus réel (rôle manquant, réseau, statut) s'affiche
+              // avec ses raisons d'origine.
+              guardContext === null
+              ? (
+                  <InfoText tone="warning">
+                    • Checking approval permissions…
+                  </InfoText>
+                )
+              : guard.reasons.map((reason) => (
+                  <InfoText key={reason} tone="warning">
+                    • {reason}
+                  </InfoText>
+                ))
             : null}
           {model.notes.map((note) => (
-            <Text key={note} style={styles.warnText}>
+            <InfoText key={note} tone="warning">
               {note}
-            </Text>
+            </InfoText>
           ))}
-        </View>
+        </InfoBox>
       ) : null}
-      <Text style={styles.secondaryText}>
-        Execution is not implemented yet — no Execute button is active in this build.
-      </Text>
 
-      {/* 7. Details techniques, replies par defaut */}
-      <TransactionTechnicalDetails
-        model={model}
-        guard={guard}
-        allowlist={allowlist}
-        proposalAddress={proposalAddress}
-      />
-
+      {/* 12. Détails techniques, repliés par défaut. */}
       <Pressable
         accessibilityRole="button"
-        accessibilityState={{ disabled: !canConfirm }}
-        disabled={!canConfirm}
-        onPress={() => {
-          // Ouvre uniquement la seconde confirmation locale : aucun envoi ici.
-          setConfirmStep(true);
-        }}
-        style={[styles.button, canConfirm ? null : styles.disabled]}
+        accessibilityState={{ expanded: advancedOpen }}
+        accessibilityLabel="Toggle advanced diagnostics"
+        onPress={() => setAdvancedOpen((previous) => !previous)}
+        style={({ pressed }) => [styles.toggle, pressed && styles.togglePressed]}
       >
-        <Text style={styles.buttonText}>Review and confirm</Text>
+        <Text style={styles.toggleText}>
+          {advancedOpen ? 'Hide advanced diagnostics' : 'Advanced diagnostics'}
+        </Text>
       </Pressable>
+      {advancedOpen ? (
+        <>
+          <Text style={styles.sectionTitle}>Technical transaction details</Text>
+          {/* Lamports EXACTS : deplaces ici, plus jamais dans le montant principal. */}
+          <Text style={styles.fieldLabel}>Raw amount</Text>
+          <Text style={styles.fieldValue}>{rawLamports(model.amount) ?? 'Unknown'}</Text>
+          <TransactionTechnicalDetails
+            model={model}
+            guard={guard}
+            allowlist={allowlist}
+            proposalAddress={proposalAddress}
+          />
+        </>
+      ) : null}
 
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Back to main screen"
-        onPress={handleBack}
-        style={[styles.button, styles.secondary]}
-      >
-        <Text style={styles.secondaryText}>Back</Text>
-      </Pressable>
+      {/* CTA de création : rendu uniquement si l'appelant le fournit. */}
+      {onCreate !== undefined ? (
+        <>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Create proposal"
+            onPress={onCreate}
+            style={({ pressed }) => [styles.primaryButton, pressed && styles.primaryPressed]}
+          >
+            <Text style={styles.primaryText}>Create proposal</Text>
+          </Pressable>
+          <Text style={styles.fieldNote}>Your wallet will ask you to sign.</Text>
+        </>
+      ) : null}
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
+  scrollView: { backgroundColor: colors.background, flex: 1, width: '100%' },
   container: {
+    alignItems: 'stretch',
+    backgroundColor: colors.background,
+    padding: spacing.lg,
+    paddingBottom: spacing.xxl * 2,
+  },
+  headerRow: {
     alignItems: 'center',
-    backgroundColor: '#ffffff',
-    padding: 24,
-    // Inset haut : sans ce décalage, le titre et le bandeau passent sous la
-    // barre d'état du Seeker (Android 16, API 36). Basé uniquement sur l'API
-    // React Native déjà présente, sans nouvelle dépendance.
-    // Doit rester APRÈS `padding` pour ne pas être écrasé par le raccourci.
-    paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) + 16 : 16,
-    paddingBottom: 48,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: spacing.lg,
   },
-  badge: {
-    backgroundColor: '#e8f0fe',
-    borderRadius: 999,
-    color: '#1a56db',
-    fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 1,
-    marginBottom: 8,
-    overflow: 'hidden',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
+  backButton: {
+    alignItems: 'center',
+    backgroundColor: colors.surfaceElevated,
+    borderRadius: radii.pill,
+    height: 40,
+    justifyContent: 'center',
+    width: 40,
   },
+  backButtonPressed: { backgroundColor: colors.surface },
+  backGlyph: { color: colors.text, fontSize: 24, lineHeight: 26 },
   title: {
-    fontSize: 22,
-    fontWeight: '700',
-    marginBottom: 12,
+    color: colors.text,
+    fontSize: typography.screenTitle - 8,
+    fontWeight: '800',
   },
+  subtitle: {
+    color: colors.textSecondary,
+    fontSize: typography.secondary,
+    lineHeight: 19,
+    marginBottom: spacing.md,
+    marginTop: spacing.sm,
+  },
+  infoBox: { marginTop: spacing.md },
+  // Correctif LOCAL (primitive partagée figée par un test) : cf. NewProposalScreen.
+  // L'unique encart qui porte ce style a un corps multi-lignes (avertissement de
+  // décodage + raisons + notes). Centrer verticalement contre tout le bloc
+  // décrochait le glyphe ⚠ de la PREMIÈRE ligne ; `alignItems: 'flex-start'` l'y
+  // ramène. Hauteur de rangée donnée par le corps : aucun déséquilibre.
+  warningBox: { alignItems: 'flex-start', padding: spacing.lg },
   previewBanner: {
-    backgroundColor: '#fff7ed',
-    borderColor: '#fdba74',
-    borderRadius: 8,
+    backgroundColor: colors.warningSoft,
+    borderColor: colors.warningSoft,
+    borderRadius: radii.field,
     borderWidth: 1,
-    color: '#9a3412',
-    fontSize: 12,
-    fontWeight: '600',
-    marginBottom: 16,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    color: colors.warning,
+    fontSize: typography.caption,
+    fontWeight: '700',
+    marginBottom: spacing.md,
+    marginTop: spacing.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
     textAlign: 'center',
   },
   onchainBanner: {
-    backgroundColor: '#ecfdf5',
-    borderColor: '#6ee7b7',
-    color: '#065f46',
+    backgroundColor: colors.successSoft,
+    borderColor: colors.successSoft,
+    color: colors.success,
   },
   onchainLine: {
-    color: '#065f46',
-    fontSize: 12,
-    fontWeight: '600',
-    marginBottom: 16,
+    color: colors.success,
+    fontSize: typography.caption,
+    fontWeight: '700',
+    marginBottom: spacing.lg,
     textAlign: 'center',
   },
   decisionOk: {
     alignSelf: 'stretch',
-    backgroundColor: '#ecfdf5',
-    borderColor: '#6ee7b7',
-    borderRadius: 12,
+    backgroundColor: colors.successSoft,
+    borderColor: colors.successSoft,
+    borderRadius: radii.card,
     borderWidth: 1,
-    marginBottom: 16,
-    padding: 16,
+    marginBottom: spacing.lg,
+    padding: spacing.lg,
   },
   decisionNeutral: {
     alignSelf: 'stretch',
-    backgroundColor: '#f3f4f6',
-    borderColor: '#e5e7eb',
-    borderRadius: 12,
+    backgroundColor: colors.surface,
+    borderColor: colors.divider,
+    borderRadius: radii.card,
     borderWidth: 1,
-    marginBottom: 16,
-    padding: 16,
+    marginBottom: spacing.lg,
+    padding: spacing.lg,
   },
   decisionTitle: {
-    color: '#065f46',
-    fontSize: 20,
+    color: colors.text,
+    fontSize: typography.sectionTitle,
     fontWeight: '800',
   },
   decisionSub: {
-    color: '#065f46',
-    fontSize: 13,
-    fontWeight: '600',
+    color: colors.mint,
+    fontSize: typography.secondary,
+    fontWeight: '700',
     marginTop: 2,
   },
   decisionState: {
-    color: '#065f46',
-    fontSize: 13,
-    marginTop: 6,
+    color: colors.textSecondary,
+    fontSize: typography.secondary,
+    marginTop: spacing.sm,
   },
   actionValue: {
-    color: '#111827',
-    fontSize: 16,
+    color: colors.text,
+    fontSize: typography.body,
     fontWeight: '700',
   },
   amountValue: {
-    color: '#111827',
-    fontSize: 26,
+    color: colors.text,
+    fontSize: typography.balance - 12,
     fontWeight: '800',
   },
-  card: {
-    alignSelf: 'stretch',
-    borderColor: '#e5e7eb',
-    borderRadius: 10,
-    borderWidth: 1,
-    padding: 14,
-  },
-  summaryLabel: {
-    color: '#6b7280',
-    fontSize: 11,
-    textTransform: 'uppercase',
-  },
-  summaryValue: {
-    color: '#101317',
-    fontSize: 18,
-    fontWeight: '600',
-    marginTop: 2,
-  },
   decode: {
-    color: '#047857',
-    fontSize: 12,
+    color: colors.success,
+    fontSize: typography.caption,
     fontWeight: '700',
-    marginTop: 6,
+    marginTop: spacing.sm,
   },
-  decodeWarn: {
-    color: '#b91c1c',
-  },
-  warnBox: {
-    alignSelf: 'stretch',
-    backgroundColor: '#fef2f2',
-    borderColor: '#fecaca',
-    borderRadius: 10,
-    borderWidth: 1,
-    marginTop: 12,
-    padding: 12,
-  },
-  warnText: {
-    color: '#991b1b',
-    fontSize: 13,
-  },
+  decodeWarn: { color: colors.error },
   fieldLabel: {
-    color: '#6b7280',
-    fontSize: 11,
-    marginTop: 12,
+    color: colors.textMuted,
+    fontSize: typography.micro,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+    marginTop: spacing.lg,
     textTransform: 'uppercase',
   },
   fieldValue: {
-    color: '#101317',
+    color: colors.text,
     fontFamily: 'monospace',
-    fontSize: 12,
-    marginTop: 2,
+    fontSize: typography.bodySmall,
+    marginTop: spacing.xs,
   },
-  button: {
+  fieldNote: {
+    color: colors.textSecondary,
+    fontSize: typography.secondary,
+    lineHeight: 18,
+    marginTop: spacing.sm,
+  },
+  toggle: {
     alignItems: 'center',
-    backgroundColor: '#1a56db',
-    borderRadius: 10,
+    backgroundColor: colors.surface,
+    borderColor: colors.divider,
+    borderRadius: radii.field,
+    borderWidth: 1,
     justifyContent: 'center',
-    marginTop: 16,
+    marginTop: spacing.lg,
     minHeight: 48,
-    paddingHorizontal: 24,
-    width: '100%',
+    paddingHorizontal: spacing.md,
   },
-  disabled: {
-    backgroundColor: '#9ca3af',
-    opacity: 0.7,
+  togglePressed: { backgroundColor: colors.surfaceElevated },
+  toggleText: { color: colors.text, fontSize: typography.bodySmall, fontWeight: '700' },
+  sectionTitle: {
+    color: colors.text,
+    fontSize: typography.bodySmall,
+    fontWeight: '800',
+    marginTop: spacing.lg,
   },
-  buttonText: {
-    color: '#ffffff',
-    fontSize: 15,
-    fontWeight: '600',
+  primaryButton: {
+    alignItems: 'center',
+    backgroundColor: colors.text,
+    borderRadius: radii.button,
+    justifyContent: 'center',
+    marginTop: spacing.xl,
+    minHeight: 52,
+    paddingHorizontal: spacing.xl,
   },
-  secondary: {
-    backgroundColor: '#f3f4f6',
+  primaryPressed: { opacity: 0.82 },
+  primaryText: {
+    color: colors.onLight,
+    fontSize: typography.body,
+    fontWeight: '800',
+    textAlign: 'center',
   },
+  secondaryButton: {
+    alignItems: 'center',
+    backgroundColor: colors.surfaceElevated,
+    borderColor: colors.divider,
+    borderRadius: radii.button,
+    borderWidth: 1,
+    justifyContent: 'center',
+    marginTop: spacing.lg,
+    minHeight: 48,
+    paddingHorizontal: spacing.lg,
+  },
+  secondaryPressed: { backgroundColor: colors.surface },
   secondaryText: {
-    color: '#101317',
-    fontSize: 16,
-    fontWeight: '600',
+    color: colors.text,
+    fontSize: typography.bodySmall,
+    fontWeight: '700',
+    textAlign: 'center',
   },
 });
