@@ -2,7 +2,7 @@
   "expo": {
     "name": "Multisig",
     "slug": "pocket-multisig",
-    "version": "0.4.30",
+    "version": "0.4.33",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -17,7 +17,7 @@
       },
       "predictiveBackGestureEnabled": false,
       "package": "com.corentinladaique.pocketmultisig",
-      "versionCode": 48
+      "versionCode": 51
     },
     "web": {
       "favicon": "./assets/favicon.png"

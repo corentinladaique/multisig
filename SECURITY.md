@@ -151,7 +151,8 @@ arbitraire.
 - **Dépendances** : `npm audit` remonte des vulnérabilités hautes transitives
   (dont `bigint-buffer` via la chaîne Squads), non corrigées à ce jour.
 - **Address Lookup Tables** non supportées à l'exécution.
-- **Pas de CI** : les tests purs sont lancés manuellement (`npm test`).
+- **CI** : les tests purs et le `typecheck` sont exécutés par GitHub Actions
+  (`.github/workflows/ci.yml`).
 - Aucun test d'intégration on-chain automatisé : les validations réelles sont
   manuelles, sur Seeker.
 

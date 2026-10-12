@@ -89,6 +89,7 @@ files=(
   scripts/vault-name-required.test.ts
   scripts/view-proposals-success.test.ts
   scripts/wallet-help.test.ts
+  scripts/wallet-identity-refresh.test.ts
 )
 
 failed=0

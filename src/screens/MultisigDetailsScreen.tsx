@@ -67,12 +67,19 @@ export function MultisigDetailsScreen({
   address,
   decodedModelFor,
   onBack,
+  openNewProposalOnMount,
   vaultName,
 }: {
   address: string;
   /** Modèles déjà décodés uniquement : ce détail ne déclenche aucune lecture. */
   decodedModelFor?: (index: number) => TransactionReviewModel | null;
   onBack: () => void;
+  /**
+   * Ouverture DIRECTE de la creation de proposition au montage. Pose par
+   * l'action rapide « Propose » du Home : l'utilisateur doit atterrir sur
+   * New Proposal sans jamais voir la vue « Vault Details ».
+   */
+  openNewProposalOnMount?: boolean;
   /** Nom local du vault (registre local uniquement), s'il est connu. */
   vaultName?: string | null;
 }) {
@@ -86,8 +93,9 @@ export function MultisigDetailsScreen({
   // pour le retour quand la categorie a change pendant la consultation.
   const [proposalFilter, setProposalFilter] = useState<ProposalFilterGroup>('todo');
   const [openProposalOrigin, setOpenProposalOrigin] = useState<ProposalFilterGroup>('todo');
-  // Creation d'une nouvelle proposition (transfert SOL simple).
-  const [newProposalOpen, setNewProposalOpen] = useState(false);
+  // Creation d'une nouvelle proposition (transfert SOL simple). Ouverte des le
+  // montage quand l'ecran est atteint via l'action rapide « Propose ».
+  const [newProposalOpen, setNewProposalOpen] = useState(openNewProposalOnMount === true);
   // Vue Receive SOL (informative) : reutilise le ReceiveScreen du Groupe 1.
   const [receiveOpen, setReceiveOpen] = useState(false);
   // Détails purement techniques (config authority, rent collector, program) :
@@ -251,6 +259,18 @@ export function MultisigDetailsScreen({
     return () => subscription.remove();
   }, [onBack]);
 
+  // Fermeture du flux de creation. Si l'ecran a ete monte uniquement pour
+  // « Propose », fermer rend la main a l'appelant (retour a l'onglet Vault) —
+  // jamais un retour sur la vue « Vault Details » que l'utilisateur n'a pas
+  // demandee. Sinon on revient a la vue detaillee, comme avant.
+  const closeNewProposal = useCallback(() => {
+    if (openNewProposalOnMount === true) {
+      onBack();
+    } else {
+      setNewProposalOpen(false);
+    }
+  }, [openNewProposalOnMount, onBack]);
+
   // Membres porteurs du droit de vote : sert a qualifier l'etat des propositions.
   const votingMembers =
     view === null
@@ -285,7 +305,7 @@ export function MultisigDetailsScreen({
         address={view.address}
         members={view.members}
         threshold={view.threshold}
-        onBack={() => setNewProposalOpen(false)}
+        onBack={closeNewProposal}
         onCreatedVerified={reloadFromChain}
         onDone={() => {
           setNewProposalOpen(false);

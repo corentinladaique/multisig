@@ -1843,7 +1843,12 @@ export function NewProposalScreen({
             avertissement (jamais rouge : l'echec n'est pas confirme). Aucune
             action de creation, aucune reprise : le wallet ne se rouvre jamais. */}
         {signedPendingVerification && step !== 'details' ? (
-          <InfoBox glyph="⚠" style={[styles.infoBox, styles.warningBoxTop]} tone="warning">
+          /* L'icône ⚠ n'est plus le `glyph` de la primitive (marge EXTERNE, à
+             gauche du conteneur de contenu) : elle est rendue DANS l'en-tête,
+             sur le MÊME axe que le titre/corps/boutons. L'alignement vient de la
+             structure (l'icône est un enfant du conteneur de contenu), jamais
+             d'une marge négative. */
+          <InfoBox style={[styles.infoBox, styles.warningBoxTop]} tone="warning">
             {/* EN-TÊTE COMPACT : la carte « sent / pending » est un REPLI, FERMÉ
                 par défaut. Replié, le titre dit déjà tout l'essentiel (« envoyé /
                 non vérifié ») — l'utilisateur n'a pas à déplier pour comprendre
@@ -1856,6 +1861,7 @@ export function NewProposalScreen({
               onPress={() => setPendingVerificationOpen((previous) => !previous)}
               style={({ pressed }) => [styles.pendingHeader, pressed && styles.togglePressed]}
             >
+              <Text style={styles.pendingHeaderGlyph}>⚠</Text>
               <Text style={styles.pendingHeaderTitle}>Proposal sent — verification pending</Text>
               <Text style={styles.pendingHeaderChevron}>{pendingVerificationOpen ? '▾' : '◂'}</Text>
             </Pressable>
@@ -2234,6 +2240,16 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     minHeight: 44,
+  },
+  /** Icône ⚠ de l'en-tête : enfant du conteneur de contenu (l'en-tête), donc
+   *  sur le MÊME axe gauche que le titre, le corps et les actions — l'alignement
+   *  vient de la structure, pas d'une marge. Aucune marge GAUCHE : uniquement
+   *  `marginRight` (espacement régulier avant le titre). Centrage vertical assuré
+   *  par `alignItems: 'center'` de `pendingHeader` (icône centrée sur la ligne). */
+  pendingHeaderGlyph: {
+    color: colors.textSecondary,
+    fontSize: typography.body,
+    marginRight: spacing.sm,
   },
   /** Titre de l'en-tête en ambre (même teinte que le corps replié), `flex: 1`
    *  pour autoriser le retour à la ligne sans jamais pousser le chevron. */

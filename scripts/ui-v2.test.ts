@@ -187,10 +187,30 @@ check('16. Copy est indisponible si l adresse manque', () => {
   assert.ok(RECEIVE.includes('Address unavailable'), 'etat honnete si absente');
 });
 
-check('17. Propose conserve son handler existant', () => {
-  assert.ok(CONNECT.includes('label="Propose"'), 'action Propose presente');
+check('17. Propose ouvre DIRECTEMENT la creation de proposition', () => {
   const propose = CONNECT.indexOf('label="Propose"');
-  assert.ok(CONNECT.slice(propose, propose + 120).includes('setManualDetailsOpen(true)'));
+  assert.ok(propose > 0, 'action Propose presente');
+  const handler = CONNECT.slice(propose, propose + 200);
+  // NOUVEAU COMPORTEMENT (validé par l'utilisateur) : « Propose » ouvre l'ecran
+  // partage AVEC l'intention de creation immediate — l'utilisateur atterrit sur
+  // New Proposal, et jamais sur la simple vue « Vault Details ».
+  assert.ok(
+    handler.includes("setManualDetailsIntent('propose')"),
+    'Propose demande la creation immediate',
+  );
+  assert.ok(
+    !handler.includes("setManualDetailsIntent('details')"),
+    'Propose ne vise pas la simple vue details',
+  );
+  const DETAILS_SRC = readFileSync('src/screens/MultisigDetailsScreen.tsx', 'utf8');
+  assert.ok(
+    DETAILS_SRC.includes('useState(openNewProposalOnMount === true)'),
+    'l ecran de creation s ouvre au montage quand le drapeau est pose',
+  );
+  assert.ok(
+    /if \(openNewProposalOnMount === true\) \{\s*onBack\(\);/.test(DETAILS_SRC),
+    'fermer le flux « Propose » rend la main a l appelant (retour onglet Vault)',
+  );
 });
 
 check('18. La vue detaillee conserve sa navigation existante', () => {
@@ -285,6 +305,20 @@ check('28. Tous les ecrans utilisateur sont migres vers UI V2', () => {
       assert.ok(source.includes('ui/v2/primitives'), `${name} doit utiliser les primitives V2`);
     }
   }
+});
+
+check('29. La vue detaillee manuelle recoit le vrai nom du vault', () => {
+  // Objectif B : le chemin « View vault details » doit transmettre le nom local
+  // resolu (`homeVaultName`), sinon l'ecran retombe sur le fallback code en dur
+  // « Main vault » (MultisigDetailsScreen).
+  const branch = CONNECT.indexOf('if (manualDetailsOpen && msig.view !== null)');
+  assert.ok(branch > 0, 'la branche detail manuel existe');
+  const block = CONNECT.slice(branch, branch + 700);
+  assert.ok(block.includes('address={msig.view.address}'), 'adresse du vault actif');
+  assert.ok(
+    block.includes('vaultName={homeVaultName}'),
+    'le nom reel du vault est transmis a l ecran detail',
+  );
 });
 
 setTimeout(() => {

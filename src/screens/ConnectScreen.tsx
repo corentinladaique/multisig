@@ -28,6 +28,7 @@ import {
   describeWalletIdentity,
   type MwaErrorReport,
 } from '../wallet/mwaDiagnostics';
+import { shouldReloadForWalletIdentity } from '../wallet/walletIdentityRefresh';
 import { PublicKey } from '@solana/web3.js';
 
 import { connection } from '../solana/connection';
@@ -361,6 +362,10 @@ export function ConnectScreen() {
   const [openDecisionOrigin, setOpenDecisionOrigin] = useState<ProposalFilterGroup>('todo');
   // Multisig charge manuellement : meme ecran de detail que ceux de l'inbox.
   const [manualDetailsOpen, setManualDetailsOpen] = useState(false);
+  // Origine de l'ouverture de la vue partagee : 'details' (« View vault details »
+  // / « View all proposals ») ou 'propose' (action rapide « Propose », qui doit
+  // mener DIRECTEMENT a la creation de proposition).
+  const [manualDetailsIntent, setManualDetailsIntent] = useState<'details' | 'propose'>('details');
   // Prechargement de l'operation de la proposition PRIORITAIRE : un seul appel
   // cible (getAccountInfo sur sa VaultTransaction), jamais pour les autres.
   const [inboxDecoded, setInboxDecoded] = useState<ProposalReviewResult | null>(null);
@@ -482,6 +487,20 @@ export function ConnectScreen() {
       setTab('vault');
     }
   }, [walletAddress]);
+  // FILET DE SÉCURITÉ (focus) : revenir sur l'onglet Proposals relit la liste
+  // on-chain (LECTURE SEULE, aucun wallet, aucune signature). Le rechargement du
+  // compte Multisig n'est PAS refait ici : `msig.load` viderait la vue courante
+  // et ferait clignoter « Loading your multisig… » à CHAQUE changement d'onglet
+  // (régression visible). La correction PRINCIPALE — le changement d'identité du
+  // wallet — relit, elle, le compte à neuf (voir l'effet dédié plus bas).
+  const previousTabRef = useRef<TabKey>(tab);
+  useEffect(() => {
+    const leftTab = previousTabRef.current;
+    previousTabRef.current = tab;
+    if (leftTab === tab) return;
+    if (tab !== 'proposals') return;
+    refreshProposalsReadOnly();
+  }, [tab, refreshProposalsReadOnly]);
   const [error, setError] = useState<string | null>(null);
   // Diagnostics MWA : étape, code et message exacts, jamais reformulés.
   const [mwaReport, setMwaReport] = useState<MwaErrorReport | null>(null);
@@ -599,6 +618,43 @@ export function ConnectScreen() {
   const viewAddress = msig.view?.address ?? null;
   const viewVaultAddress = msig.view?.vaultAddress ?? null;
   const view = msig.view ?? null;
+
+  /**
+   * IDENTITÉ DU WALLET (clé publique du signataire) : elle CHANGE sans que ce
+   * composant soit remonté quand l'utilisateur bascule d'un wallet à un autre
+   * DANS l'app (disconnect puis connect). Or la vue du multisig (dont le
+   * `transactionIndex` lu on-chain) et la liste des propositions ont été lues
+   * UNE fois puis mises en cache : aucune dépendance ne les relisait pour le
+   * NOUVEAU signataire. Une proposition créée après le dernier chargement
+   * (index on-chain devenu supérieur au `transactionIndex` en cache) — ainsi que
+   * les compteurs/badges « waiting for your vote » et le « To do » — restaient
+   * donc invisibles jusqu'à une RELANCE de l'app (qui, elle, relit le compte à
+   * neuf). On relit ici, en LECTURE SEULE, dès que l'identité du signataire
+   * change : compte Multisig frais (transactionIndex à jour) PUIS propositions.
+   * Aucun wallet, aucune signature, aucun envoi.
+   *
+   * Même famille que la relecture du registre au retour d'une création : une
+   * dépendance explicite sur l'identité remplace l'absence de relecture.
+   */
+  const lastWalletIdentityRef = useRef<string | null>(null);
+  useEffect(() => {
+    // Déconnecté : on ne relit rien ET on ne mémorise pas `null`, sinon une
+    // reconnexion du MÊME wallet serait vue comme un changement d'identité.
+    if (walletAddress === null) return;
+    const previous = lastWalletIdentityRef.current;
+    // On mémorise TOUTE identité réelle dès qu'elle apparaît (même sans vault) :
+    // ainsi le tout premier chargement automatique ne sera pas suivi d'une
+    // relecture inutile, et seule une VRAIE bascule déclenche la relecture.
+    lastWalletIdentityRef.current = walletAddress;
+    if (!shouldReloadForWalletIdentity(previous, walletAddress, viewAddress !== null)) return;
+    // Prudence de typage : le helper garantit déjà qu'un vault est chargé ici.
+    if (viewAddress === null) return;
+    loadVault(viewAddress);
+    // Libère le garde anti-chevauchement puis force une relecture on-chain : les
+    // compteurs/badges sont recalculés au rendu suivant, sur la liste fraîche.
+    proposalsRefreshRef.current = false;
+    setProposalsNonce((previousNonce) => previousNonce + 1);
+  }, [loadVault, viewAddress, walletAddress]);
 
   // --- Tableau de bord Home -------------------------------------------------
   // Solde du Main vault, chargé en lecture seule AVEC son adresse : changer de
@@ -1348,13 +1404,22 @@ export function ConnectScreen() {
     );
   }
 
-  // Multisig charge manuellement : le meme ecran de detail que ceux de l'inbox.
+  // Multisig charge manuellement : meme ecran de detail que ceux de l'inbox.
   // L'adresse vient de la vue deja lue : aucun appel reseau supplementaire ici.
   if (manualDetailsOpen && msig.view !== null) {
     return (
       <MultisigDetailsScreen
         address={msig.view.address}
-        onBack={() => setManualDetailsOpen(false)}
+        onBack={() => {
+          setManualDetailsOpen(false);
+          // Toute reouverture repart de la vue detaillee par defaut.
+          setManualDetailsIntent('details');
+        }}
+        // Objectif A : « Propose » ouvre DIRECTEMENT la creation de proposition,
+        // jamais la simple vue « Vault Details ».
+        openNewProposalOnMount={manualDetailsIntent === 'propose'}
+        // Objectif B : vrai nom local du vault (sinon fallback « Main vault »).
+        vaultName={homeVaultName}
       />
     );
   }
@@ -1903,7 +1968,10 @@ export function ConnectScreen() {
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel="Open this multisig in the shared detail screen"
-                onPress={() => setManualDetailsOpen(true)}
+                onPress={() => {
+                  setManualDetailsIntent('details');
+                  setManualDetailsOpen(true);
+                }}
                 style={({ pressed }) => [
                   styles.inlineAction,
                   pressed && styles.inlineActionPressed,
@@ -1918,7 +1986,17 @@ export function ConnectScreen() {
           {view === null ? null : (
             <View style={styles.actionRow}>
               <HomeAction glyph="↓" label="Receive" onPress={() => setReceiveOpen(true)} />
-              <HomeAction glyph="↗" label="Propose" onPress={() => setManualDetailsOpen(true)} />
+              {/* Objectif A : « Propose » ouvre l'ecran partage AVEC l'intention de
+                  creation immediate — l'utilisateur atterrit sur New Proposal,
+                  jamais sur la vue « Vault Details » (aucun flash). */}
+              <HomeAction
+                glyph="↗"
+                label="Propose"
+                onPress={() => {
+                  setManualDetailsIntent('propose');
+                  setManualDetailsOpen(true);
+                }}
+              />
               {/* Tuile « Signers » RETIREE (decision produit de Corentin) : elle
                   menait au MEME ecran que « View vault details », qui porte
                   desormais le repere d'accessibilite de la vue detaillee. */}
@@ -2004,7 +2082,10 @@ export function ConnectScreen() {
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel="View all proposals"
-                  onPress={() => setManualDetailsOpen(true)}
+                  onPress={() => {
+                    setManualDetailsIntent('details');
+                    setManualDetailsOpen(true);
+                  }}
                   style={({ pressed }) => [
                     styles.inlineAction,
                     styles.viewAllAction,

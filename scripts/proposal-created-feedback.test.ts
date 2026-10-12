@@ -340,4 +340,30 @@ check('e4. le repli « How proposal creation works » reste fermé par défaut',
   assert.ok(NEW.includes('{howItWorksOpen ? ('), 'contenu rendu seulement deplie');
 });
 
+// --- (f) Alignement de l'icône ⚠ sur l'axe du contenu -------------------------
+
+check('f1. l icône ⚠ est DANS le conteneur de contenu : même axe que titre/corps', () => {
+  // L'icône n'est plus le `glyph` de la primitive (rendu en marge EXTERNE, à
+  // gauche du conteneur de contenu) : elle est un enfant de l'en-tête, donc sur
+  // le MÊME axe gauche que le titre, le corps et les actions.
+  const headerAt = AMBER.indexOf('accessibilityLabel="Toggle proposal sent details"');
+  const titleAt = AMBER.indexOf('>Proposal sent — verification pending<');
+  assert.ok(headerAt > 0 && titleAt > headerAt, 'en-tête localisé avant le titre');
+  assert.ok(
+    AMBER.slice(headerAt, titleAt).includes('>⚠<'),
+    'icône ⚠ rendue dans l en-tête (même axe que le titre)',
+  );
+  assert.ok(!AMBER.includes('glyph="⚠"'), 'plus de glyphe en marge externe (hors contenu)');
+});
+
+check('f2. l alignement de l icône n utilise AUCUNE marge gauche négative', () => {
+  // La correction est structurelle : l'icône n'a que `marginRight` (espacement),
+  // jamais de `marginLeft` (a fortiori négative) qui contraindrait l'axe.
+  const glyphStyleAt = NEW.indexOf('pendingHeaderGlyph:');
+  assert.ok(glyphStyleAt > 0, 'style de l icône présent');
+  const glyphStyle = NEW.slice(glyphStyleAt, NEW.indexOf('}', glyphStyleAt));
+  assert.ok(!glyphStyle.includes('marginLeft'), 'aucune marge gauche sur l icône');
+  assert.ok(glyphStyle.includes('marginRight: spacing.sm'), 'seul un espacement à droite (token)');
+});
+
 console.log(`\n${passed} test(s) OK`);
