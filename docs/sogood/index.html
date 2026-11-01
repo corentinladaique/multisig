@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Assistant éditorial — So good</title>
+<meta name="description" content="Assistant éditorial pour « So good » : d'un article collé à un post Instagram — titre, surlignages, légende, visuel 1080×1350. Démonstration statique.">
+<style>
+/* Feuille de style reprise telle quelle de l'application réelle. */
+:root {
+  --bg: #f5f5f2;
+  --surface: #ffffff;
+  --surface-2: #fafaf8;
+  --border: #e3e3dd;
+  --border-strong: #cfcfc7;
+  --text: #17171a;
+  --muted: #6c6c72;
+  --accent: #ffd100;
+  --accent-ink: #17171a;
+  --danger: #b3261e;
+  --danger-bg: #fdecea;
+  --warn: #8a6100;
+  --warn-bg: #fff6d9;
+  --ok: #1b7f4b;
+  --ok-bg: #e8f5ee;
+  --info-bg: #eef3fb;
+  --info: #2a4b8d;
+  --radius: 10px;
+  --shadow: 0 1px 2px rgba(20, 20, 20, 0.06), 0 6px 18px rgba(20, 20, 20, 0.05);
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; padding: 0;
+  background: var(--bg); color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-size: 15px; line-height: 1.5; -webkit-text-size-adjust: 100%;
+}
+a { color: inherit; }
+.shell { max-width: 1220px; margin: 0 auto; padding: 20px 18px 72px; }
+
+.media-header {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 18px 20px; box-shadow: var(--shadow); margin-bottom: 18px;
+}
+.media-header__row { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; justify-content: space-between; }
+.media-name { font-size: 22px; font-weight: 800; letter-spacing: -0.02em; }
+.media-name span { background: var(--accent); padding: 1px 7px; border-radius: 4px; }
+.media-tagline { color: var(--muted); font-size: 14px; margin-top: 3px; }
+.media-header__meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+
+.banner { border-radius: var(--radius); padding: 12px 14px; font-size: 14px; border: 1px solid transparent; margin-bottom: 14px; }
+.banner strong { font-weight: 700; }
+.banner--warn { background: var(--warn-bg); border-color: #f0dca0; color: var(--warn); }
+.banner--info { background: var(--info-bg); border-color: #cfdcf2; color: var(--info); }
+.banner--ok { background: var(--ok-bg); border-color: #bfe3cd; color: var(--ok); }
+
+.pill {
+  display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 3px 11px;
+  font-size: 12px; font-weight: 700; border: 1px solid var(--border-strong);
+  background: var(--surface-2); color: var(--muted); white-space: nowrap;
+}
+.pill--brouillon { background: #f0f0ee; color: #55555c; border-color: #dcdcd6; }
+.pill--valide { background: var(--ok-bg); color: var(--ok); border-color: #bfe3cd; }
+.pill--publie { background: #e7ecfb; color: var(--info); border-color: #c8d5f0; }
+.pill--demo { background: var(--accent); color: var(--accent-ink); border-color: #e6bd00; }
+
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 18px 20px; margin-bottom: 16px; }
+.card__title { font-size: 15px; font-weight: 800; margin: 0 0 4px; letter-spacing: -0.01em; }
+.card__hint { color: var(--muted); font-size: 13px; margin: 0 0 14px; }
+.card__head { display: flex; flex-wrap: wrap; gap: 10px; align-items: baseline; justify-content: space-between; }
+
+.field { margin-bottom: 13px; }
+.field > label { display: block; font-size: 13px; font-weight: 700; margin-bottom: 5px; }
+.field__hint { color: var(--muted); font-size: 12px; margin-top: 4px; }
+input[type="text"], input[type="url"], input[type="date"], textarea, select {
+  width: 100%; font: inherit; color: var(--text); background: var(--surface-2);
+  border: 1px solid var(--border-strong); border-radius: 8px; padding: 9px 11px;
+}
+textarea { resize: vertical; min-height: 90px; line-height: 1.45; }
+input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); outline-offset: 1px; background: #fff; }
+.grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0 14px; }
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  font: inherit; font-weight: 700; cursor: pointer; border-radius: 8px; padding: 9px 15px;
+  border: 1px solid var(--border-strong); background: var(--surface); color: var(--text);
+}
+.btn:hover { background: var(--surface-2); }
+.btn--primary { background: var(--accent); border-color: #e6bd00; color: var(--accent-ink); }
+.btn--primary:hover { background: #f2c800; }
+.btn--ghost { background: transparent; }
+.btn--sm { padding: 6px 11px; font-size: 13px; }
+.btn-row { display: flex; flex-wrap: wrap; gap: 9px; align-items: center; }
+.btn-row__hint { color: var(--muted); font-size: 13px; }
+
+.draft-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.draft-item {
+  display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 13px 15px; box-shadow: var(--shadow);
+}
+.draft-item__main { min-width: 0; flex: 1 1 320px; }
+.draft-item__title { font-weight: 700; text-decoration: none; display: block; overflow: hidden; text-overflow: ellipsis; }
+.draft-item__title:hover { text-decoration: underline; }
+.draft-item__meta { color: var(--muted); font-size: 12.5px; margin-top: 3px; }
+.draft-item__side { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+.editor-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.editor-col { min-width: 0; }
+.topbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.topbar h1 { font-size: 19px; margin: 0; letter-spacing: -0.02em; }
+.topbar__meta { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; }
+
+.visual-wrap { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.visual-frame { position: relative; overflow: hidden; border-radius: 8px; border: 1px solid var(--border-strong); background: #111; box-shadow: var(--shadow); }
+.visual-frame img { display: block; width: 100%; height: auto; }
+.visual-actions { width: 100%; justify-content: center; flex-wrap: wrap; }
+.thumb { max-width: 100%; border-radius: 7px; border: 1px solid var(--border); display: block; }
+
+.title-editor { margin: 14px 0; }
+.title-editor__variant { margin: 0 0 6px; font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.title-toolbar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 7px 9px;
+  background: var(--surface-2); border: 1px solid var(--border); border-bottom: 0; border-radius: 8px 8px 0 0;
+}
+.title-toolbar__hint { font-size: 12px; color: var(--muted); margin-left: auto; }
+.title-field { position: relative; }
+.title-mirror { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+.title-field textarea.title-input, .title-mirror__inner {
+  font: inherit; font-size: 14px; line-height: 1.5; padding: 10px 12px; box-sizing: border-box;
+  width: 100%; min-height: 82px; white-space: pre-wrap; overflow-wrap: break-word; word-break: break-word;
+  border: 1px solid var(--border); border-radius: 0 0 8px 8px;
+}
+.title-mirror__inner { color: transparent; background: transparent; border-color: transparent; }
+.title-mirror__inner .hl { background: var(--hl-bg, #ffd100); color: transparent; border-radius: 3px; }
+.title-field textarea.title-input {
+  position: relative; display: block; resize: none; background: transparent; color: var(--text);
+  caret-color: var(--text); overflow: auto;
+}
+.title-field textarea.title-input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+.segmented { display: inline-flex; border: 1px solid var(--border-strong); border-radius: 8px; overflow: hidden; }
+.segmented__item { font: inherit; font-size: 13px; font-weight: 600; padding: 6px 16px; border: 0; background: var(--surface); color: var(--text); cursor: pointer; }
+.segmented__item + .segmented__item { border-left: 1px solid var(--border-strong); }
+.segmented__item--active { background: var(--accent); color: var(--accent-ink); }
+
+.settings { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 12px; }
+.collapse > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; }
+.collapse > summary::-webkit-details-marker { display: none; }
+.collapse > summary::before { content: "▸"; color: var(--muted); font-size: 12px; }
+.collapse[open] > summary::before { content: "▾"; }
+
+.fact-list { margin: 0 0 12px; padding-left: 20px; font-size: 13.5px; line-height: 1.5; }
+.fact-list li { margin-bottom: 7px; }
+.fact-ref { display: block; font-size: 12px; color: var(--muted); }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+
+/* Propositions éditoriales -------------------------------------------------- */
+.proposals { margin-top: 14px; padding: 12px 14px; border: 1px solid var(--accent); border-radius: 9px; background: var(--surface-2); }
+.proposal { padding: 10px 0; border-top: 1px solid var(--border); }
+.proposal:first-of-type { border-top: 0; padding-top: 0; }
+.proposal__head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.proposal__text { margin: 8px 0 0; font-size: 13.5px; line-height: 1.55; white-space: pre-wrap; }
+
+.hidden { display: none !important; }
+
+@media (max-width: 980px) {
+  .editor-grid { grid-template-columns: 1fr; }
+  .grid-3 { grid-template-columns: 1fr; }
+  .editor-col--visual { order: -1; }
+  .visual-frame { width: min(100%, 220px); }
+}
+@media (max-width: 620px) {
+  .shell { padding: 14px 12px 60px; }
+  .media-name { font-size: 19px; }
+}
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <div class="media-header">
+    <div class="media-header__row">
+      <div>
+        <div class="media-name"><span>So good</span></div>
+        <div class="media-tagline">Média de société pour un monde moins pire</div>
+      </div>
+      <div class="media-header__meta">
+        <span class="pill pill--demo">Démonstration statique</span>
+        <a class="pill" href="https://multisig.fr/">multisig.fr</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="banner banner--info">
+    <strong>Version de démonstration.</strong> L'assistant réel tourne en local : il garde les brouillons
+    dans une base de données et s'appuie sur un fournisseur IA pour proposer les légendes. Ici, l'interface
+    est réelle mais <strong>rien n'est enregistré, rien n'est envoyé</strong> — la saisie, les propositions
+    et les exports sont hors service.
+  </div>
+
+  <!-- ============================ ACCUEIL ============================ -->
+  <section id="vue-accueil">
+
+    <div class="card">
+      <p class="card__title">Ce que fait l'outil</p>
+      <p class="card__hint" style="margin-bottom:10px">
+        D'un article collé à la main, il produit un post Instagram : un titre mis en avant par des
+        surlignages, une légende dans la voix du média, et le visuel 1080×1350 exporté en PNG.
+      </p>
+      <ul class="fact-list">
+        <li>Saisie manuelle uniquement — aucune récupération automatique d'article.</li>
+        <li>Trois angles de légende : directe et factuelle, contextualisée, accroche plus incisive.</li>
+        <li>Les surlignages suivent le texte : ils sont enregistrés comme des positions, pas comme des mots.</li>
+        <li>Aucun logo n'est inventé ni redessiné : l'emplacement reste vide tant que le média n'en fournit pas.</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <p class="card__title">Nouveau brouillon</p>
+      <p class="card__hint">Saisie manuelle uniquement : aucune récupération automatique d'article.</p>
+      <div class="field">
+        <label for="nouveau-titre">Titre du sujet</label>
+        <input type="text" id="nouveau-titre" placeholder="Ex. : Crise du logement à Madrid" disabled>
+      </div>
+      <div class="field">
+        <label for="nouveau-texte">Texte source (collé)</label>
+        <textarea id="nouveau-texte" placeholder="Collez ici le contenu source…" disabled></textarea>
+      </div>
+      <div class="grid-3">
+        <div class="field">
+          <label for="nouveau-url">URL de provenance (facultatif)</label>
+          <input type="url" id="nouveau-url" disabled>
+        </div>
+        <div class="field">
+          <label for="nouveau-source">Nom de la source (facultatif)</label>
+          <input type="text" id="nouveau-source" disabled>
+        </div>
+        <div class="field">
+          <label for="nouveau-date">Date de la source (facultatif)</label>
+          <input type="date" id="nouveau-date" disabled>
+        </div>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn--primary" disabled>Créer le brouillon</button>
+        <span class="btn-row__hint">Hors service dans la démonstration.</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card__head">
+        <p class="card__title">Brouillons</p>
+        <button class="btn btn--sm" disabled>Rafraîchir</button>
+      </div>
+      <p class="card__hint">1 brouillon enregistré — celui de la démonstration.</p>
+      <ul class="draft-list">
+        <li class="draft-item">
+          <div class="draft-item__main">
+            <a class="draft-item__title" href="#" onclick="ouvrirBrouillon(); return false;">
+              300 000 personnes ont marché contre la crise du logement à Madrid
+            </a>
+            <div class="draft-item__meta">Créé le 27/10/2026 · Modifié le 27/10/2026 · Source : Source de démonstration</div>
+          </div>
+          <div class="draft-item__side">
+            <span class="pill pill--brouillon">Brouillon</span>
+            <button class="btn btn--sm btn--primary" onclick="ouvrirBrouillon()">Ouvrir</button>
+          </div>
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ============================ BROUILLON ============================ -->
+  <section id="vue-brouillon" class="hidden">
+
+    <div class="topbar">
+      <div>
+        <h1>300 000 personnes ont marché contre la crise du logement à Madrid</h1>
+        <div class="topbar__meta">
+          <span class="pill pill--brouillon">Brouillon</span>
+          <span class="pill pill--valide">Enregistré</span>
+          <span class="pill">Aucune génération</span>
+          <span class="pill">So good</span>
+        </div>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn--ghost" onclick="retourAccueil()">Liste</button>
+        <button class="btn btn--primary" disabled>Enregistrer</button>
+      </div>
+    </div>
+
+    <div class="editor-grid">
+      <!-- Colonne gauche -->
+      <div class="editor-col">
+
+        <div class="card">
+          <p class="card__title">1. Saisie manuelle</p>
+          <p class="card__hint">Aucune récupération automatique d'article : tout est saisi ou collé à la main.</p>
+          <div class="field">
+            <label for="titre-sujet">Titre du sujet</label>
+            <input type="text" id="titre-sujet" value="Crise du logement à Madrid" disabled>
+          </div>
+          <div class="field">
+            <label for="texte-source">Texte source</label>
+            <textarea id="texte-source" disabled>Samedi 26 septembre, une manifestation organisée par plusieurs collectifs de locataires a rassemblé, selon les organisateurs, 300 000 personnes dans le centre de Madrid. La mobilisation portait sur la hausse des loyers et la pénurie de logements abordables. Le ministère de l'Intérieur n'a pas publié de chiffre. Le gouvernement régional a annoncé la mise à l'étude d'un encadrement des loyers, sans calendrier.</textarea>
+          </div>
+          <div class="grid-3">
+            <div class="field">
+              <label for="url-source">URL de provenance</label>
+              <input type="url" id="url-source" disabled>
+            </div>
+            <div class="field">
+              <label for="nom-source">Nom de la source</label>
+              <input type="text" id="nom-source" value="Source de démonstration" disabled>
+            </div>
+            <div class="field">
+              <label for="date-source">Date de la source</label>
+              <input type="date" id="date-source" value="2026-09-26" disabled>
+            </div>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn--primary" disabled>Préparer les propositions</button>
+            <span class="btn-row__hint">Rien n'est appliqué automatiquement.</span>
+          </div>
+
+          <details class="collapse settings">
+            <summary>Vérification : faits et points à vérifier</summary>
+            <ul class="fact-list">
+              <li>300 000 personnes — chiffre donné par les organisateurs, non confirmé par une autorité indépendante.
+                <span class="fact-ref">Texte source</span></li>
+              <li>Le ministère de l'Intérieur n'a pas publié de chiffre. <span class="fact-ref">Texte source</span></li>
+              <li>Encadrement des loyers annoncé « à l'étude », sans calendrier. <span class="fact-ref">Texte source</span></li>
+            </ul>
+          </details>
+        </div>
+
+        <div class="card">
+          <div class="card__head">
+            <p class="card__title">2. Légende</p>
+            <span class="pill pill--publie">Fournisseur IA</span>
+          </div>
+          <div class="field">
+            <label for="legende">Texte de la publication</label>
+            <textarea id="legende" style="min-height:120px" placeholder="La légende s'écrit ici…"></textarea>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn--sm" onclick="copierLegende()">Copier la légende</button>
+          </div>
+          <p class="field__hint">Le titre de l'image est un contenu distinct : il se règle dans l'onglet Visuel.</p>
+          <p class="field__hint">Aucune proposition pour l'instant : lancez la préparation depuis l'onglet Sources.</p>
+
+          <div class="proposals">
+            <p class="card__title" style="margin-bottom:8px">Trois angles proposés</p>
+            <div class="proposal">
+              <div class="proposal__head">
+                <strong>Directe et factuelle</strong>
+                <button class="btn btn--sm" onclick="remplirLegende(0)">Utiliser</button>
+              </div>
+              <p class="proposal__text">300 000 personnes ont manifesté samedi 26 septembre dans le centre de Madrid contre la hausse des loyers et la pénurie de logements abordables, selon les organisateurs. Le gouvernement régional annonce étudier un encadrement des loyers, sans calendrier.</p>
+            </div>
+            <div class="proposal">
+              <div class="proposal__head">
+                <strong>Contextualisée</strong>
+                <button class="btn btn--sm" onclick="remplirLegende(1)">Utiliser</button>
+              </div>
+              <p class="proposal__text">Samedi 26 septembre, plusieurs collectifs de locataires ont rassemblé à Madrid, selon leurs propres chiffres, 300 000 personnes contre la hausse des loyers et la pénurie de logements abordables. Le ministère de l'Intérieur n'a publié aucun chiffre. Dans cette région, l'encadrement des loyers est annoncé comme une piste à l'étude, sans calendrier.</p>
+            </div>
+            <div class="proposal">
+              <div class="proposal__head">
+                <strong>Accroche plus incisive</strong>
+                <button class="btn btn--sm" onclick="remplirLegende(2)">Utiliser</button>
+              </div>
+              <p class="proposal__text">300 000 personnes dans les rues de Madrid pour les loyers. Le chiffre vient des organisateurs ; le ministère de l'Intérieur, lui, n'a rien publié. L'encadrement des loyers reste « à l'étude », sans calendrier.</p>
+            </div>
+          </div>
+
+          <div class="field" style="margin-top:16px">
+            <label for="badge">Badge (1 à 3 mots)</label>
+            <input type="text" id="badge" value="SO GOOD NEWS" oninput="majBadge()">
+          </div>
+        </div>
+
+        <details class="collapse card">
+          <summary><strong>3. Suivi</strong></summary>
+          <p class="field__hint">Brouillon → à valider → validé → publié. Les passages d'un état à l'autre sont horodatés.</p>
+        </details>
+
+        <details class="collapse card">
+          <summary><strong>Historique des modifications</strong> <span class="pill">3 entrée(s)</span></summary>
+          <ul class="fact-list" style="margin-top:10px">
+            <li>Création du brouillon. <span class="fact-ref">27/10/2026</span></li>
+            <li>Titre du sujet renseigné. <span class="fact-ref">27/10/2026</span></li>
+            <li>Deux surlignages posés sur le titre. <span class="fact-ref">27/10/2026</span></li>
+          </ul>
+        </details>
+      </div>
+
+      <!-- Colonne droite -->
+      <div class="editor-col editor-col--visual">
+
+        <div class="card">
+          <div class="visual-wrap">
+            <div class="visual-frame" style="width:min(100%,340px)">
+              <img id="visuel" src="visuel-demo.png" alt="Aperçu du post : 300 000 personnes ont marché contre la crise du logement à Madrid">
+            </div>
+            <div class="btn-row visual-actions">
+              <button class="btn btn--sm btn--primary" disabled>Changer la photo</button>
+              <button class="btn btn--sm" disabled>Recadrer</button>
+              <button class="btn btn--sm" disabled>Titre</button>
+              <button class="btn btn--sm" disabled>Retirer la photo</button>
+            </div>
+          </div>
+          <p class="field__hint" style="margin-top:12px">
+            Import manuel uniquement (écrit immédiatement). Aucune image n'est récupérée sur Internet ni générée.
+          </p>
+
+          <details class="collapse settings">
+            <summary>Recadrer la photo</summary>
+            <div class="field" style="margin-top:12px">
+              <label>Titre affiché</label>
+              <div class="segmented" id="segments-titre">
+                <button class="segmented__item segmented__item--active" data-mode="court">Court</button>
+                <button class="segmented__item" data-mode="developpe">Développé</button>
+              </div>
+            </div>
+          </details>
+
+          <div class="title-editor">
+            <p class="title-editor__variant">Édition : titre court</p>
+            <div class="title-toolbar">
+              <button class="btn btn--sm btn--primary" onclick="surligner()">Surligner</button>
+              <button class="btn btn--sm" onclick="annulerSurlignage()">Annuler</button>
+              <button class="btn btn--sm" disabled>Rétablir</button>
+              <span class="title-toolbar__hint" id="astuce-titre">Sélectionnez un passage dans le titre.</span>
+            </div>
+            <div class="title-field">
+              <div class="title-mirror" aria-hidden="true"><div class="title-mirror__inner" id="titre-miroir"></div></div>
+              <textarea class="title-input" id="titre-image" spellcheck="false">300 000 personnes ont marché contre la crise du logement à Madrid</textarea>
+            </div>
+            <p class="field__hint">
+              Retours à la ligne conservés. Les surlignages sont enregistrés avec le texte : ils suivent vos modifications.
+            </p>
+          </div>
+
+          <div class="btn-row">
+            <button class="btn btn--primary" onclick="exporterPng()">Exporter PNG (titre court)</button>
+            <button class="btn" onclick="exporterPng()">Exporter PNG (titre développé)</button>
+          </div>
+
+          <details class="collapse settings">
+            <summary>Réglages graphiques avancés</summary>
+            <ul class="fact-list" style="margin-top:10px">
+              <li>Fond du visuel : motif pixel — aucune photo n'est utilisée dans la démonstration.</li>
+              <li>Hauteur du titre, contraste du badge, marges : réglables dans la version locale.</li>
+            </ul>
+          </details>
+        </div>
+
+        <div class="card">
+          <p class="card__title">Logo du média</p>
+          <p class="card__hint">Fichier fourni par le média uniquement. Aucun logo n'est inventé ni redessiné.</p>
+          <p class="field__hint">Aucun logo importé — l'emplacement reste vide dans le visuel.</p>
+          <input type="file" disabled style="margin-top:8px">
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <p class="field__hint" style="text-align:center; margin-top:26px">
+    Assistant éditorial — prototype local. Version statique publiée pour présentation.
+  </p>
+</div>
+
+<script>
+/* Bascule entre l'accueil et le brouillon. */
+function ouvrirBrouillon() {
+  document.getElementById("vue-accueil").classList.add("hidden");
+  document.getElementById("vue-brouillon").classList.remove("hidden");
+  window.scrollTo(0, 0);
+}
+function retourAccueil() {
+  document.getElementById("vue-brouillon").classList.add("hidden");
+  document.getElementById("vue-accueil").classList.remove("hidden");
+  window.scrollTo(0, 0);
+}
+
+/* Contrôle segmenté « Titre affiché ». */
+document.querySelectorAll("#segments-titre .segmented__item").forEach(function (bouton) {
+  bouton.addEventListener("click", function () {
+    document.querySelectorAll("#segments-titre .segmented__item")
+      .forEach(function (b) { b.classList.remove("segmented__item--active"); });
+    bouton.classList.add("segmented__item--active");
+    document.querySelector(".title-editor__variant").textContent =
+      bouton.dataset.mode === "court" ? "Édition : titre court" : "Édition : titre développé";
+  });
+});
+
+/* Le titre : un champ texte derrière un miroir transparent, où l'on dessine les
+   surlignages. Les positions sont stockées en { début, fin } sur le texte, comme
+   dans l'application — elles suivent donc les modifications du texte. */
+var titreInput = document.getElementById("titre-image");
+var titreMiroir = document.getElementById("titre-miroir");
+var surlignages = [{ debut: 0, fin: 17 }, { debut: 39, fin: 56 }];
+
+function rendreMiroir() {
+  var texte = titreInput.value;
+  var bords = new Set();
+  surlignages.forEach(function (s) { bords.add(s.debut); bords.add(s.fin); });
+  var positions = Array.from(bords).sort(function (a, b) { return a - b; });
+  var html = "";
+  for (var i = 0; i < positions.length; i++) {
+    var debut = positions[i];
+    var fin = (i + 1 < positions.length) ? positions[i + 1] : texte.length;
+    var ouvert = surlignages.some(function (s) { return s.debut <= debut && s.fin > debut; });
+    var morceau = echapper(texte.slice(debut, fin));
+    html += ouvert ? '<span class="hl">' + morceau + "</span>" : morceau;
+  }
+  if (positions.length === 0) html = echapper(texte);
+  titreMiroir.innerHTML = html + (texte.endsWith("\n") ? "<br>" : "");
+  titreMiroir.scrollTop = titreInput.scrollTop;
+}
+
+function echapper(t) {
+  return t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/* Les positions sont recalculées quand le texte change : un surlignage qui
+   déborde est ramené dans les limites, jamais laissé sur du vide. */
+titreInput.addEventListener("input", function () {
+  var longueur = titreInput.value.length;
+  surlignages = surlignages
+    .map(function (s) { return { debut: Math.min(s.debut, longueur), fin: Math.min(s.fin, longueur) }; })
+    .filter(function (s) { return s.fin > s.debut; });
+  rendreMiroir();
+});
+titreInput.addEventListener("scroll", function () { titreMiroir.scrollTop = titreInput.scrollTop; });
+
+var sauvegarde = null;
+function surligner() {
+  var debut = titreInput.selectionStart;
+  var fin = titreInput.selectionEnd;
+  if (debut === fin) {
+    document.getElementById("astuce-titre").textContent = "Sélectionnez d'abord un passage dans le titre.";
+    return;
+  }
+  document.getElementById("astuce-titre").textContent = "Sélectionnez un passage dans le titre.";
+  sauvegarde = surlignages.slice();
+  /* Une sélection qui couvre déjà des surlignages les retire. */
+  var chevauche = surlignages.some(function (s) { return s.debut <= debut && s.fin >= fin; });
+  if (chevauche) {
+    surlignages = surlignages.filter(function (s) { return !(s.debut >= debut && s.fin <= fin); });
+  } else {
+    surlignages.push({ debut: debut, fin: fin });
+    surlignages.sort(function (a, b) { return a.debut - b.debut; });
+  }
+  rendreMiroir();
+}
+function annulerSurlignage() {
+  if (sauvegarde) { surlignages = sauvegarde; sauvegarde = null; rendreMiroir(); }
+}
+
+function copierLegende() {
+  var texte = document.getElementById("legende").value;
+  if (!texte) return;
+  navigator.clipboard.writeText(texte);
+}
+
+var legendes = [
+  "300 000 personnes ont manifesté samedi 26 septembre dans le centre de Madrid contre la hausse des loyers et la pénurie de logements abordables, selon les organisateurs. Le gouvernement régional annonce étudier un encadrement des loyers, sans calendrier.",
+  "Samedi 26 septembre, plusieurs collectifs de locataires ont rassemblé à Madrid, selon leurs propres chiffres, 300 000 personnes contre la hausse des loyers et la pénurie de logements abordables. Le ministère de l'Intérieur n'a publié aucun chiffre. Dans cette région, l'encadrement des loyers est annoncé comme une piste à l'étude, sans calendrier.",
+  "300 000 personnes dans les rues de Madrid pour les loyers. Le chiffre vient des organisateurs ; le ministère de l'Intérieur, lui, n'a rien publié. L'encadrement des loyers reste « à l'étude », sans calendrier."
+];
+function remplirLegende(i) { document.getElementById("legende").value = legendes[i]; }
+
+/* Le badge du visuel ne peut pas être regénéré sans le serveur : on le signale. */
+function majBadge() {
+  var champ = document.getElementById("badge");
+  var mots = champ.value.trim().split(/\s+/).filter(Boolean);
+  if (mots.length > 3) {
+    champ.value = mots.slice(0, 3).join(" ");
+  }
+}
+
+function exporterPng() {
+  var lien = document.createElement("a");
+  lien.href = "visuel-demo.png";
+  lien.download = "post-so-good.png";
+  lien.click();
+}
+
+rendreMiroir();
+</script>
+</body>
+</html>
